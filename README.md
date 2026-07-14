@@ -1,4 +1,4 @@
-# 🍽️ QROrder - Hệ Thống Đặt Món Tại Bàn Cao Cấp (Realtime QR Code Ordering System)
+# 🍽️ TapOrder - Hệ Thống Đặt Món Tại Bàn Cao Cấp (Realtime QR Code Ordering System)
 
 Hệ thống gọi món và quản lý vận hành trực tuyến qua mã QR thông minh dành cho nhà hàng, quán ăn hiện đại. Thiết kế tối ưu trải nghiệm khách hàng di động và tăng hiệu suất vận hành cho quản lý trên máy tính/laptop.
 
