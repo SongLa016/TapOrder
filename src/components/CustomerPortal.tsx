@@ -1,0 +1,699 @@
+import React, { useState } from 'react'
+import { MenuItem, Order, OrderItem, Table, RestaurantInfo } from '../types.ts'
+import { 
+  ShoppingBag, 
+  Bell, 
+  Receipt, 
+  ChevronLeft, 
+  Plus, 
+  Minus, 
+  Trash2, 
+  CheckCircle,
+  HelpCircle,
+  Star
+} from 'lucide-react'
+
+interface CustomerPortalProps {
+  tableNumber: number
+  restaurant: RestaurantInfo
+  menu: MenuItem[]
+  orders: Order[]
+  tables: Table[]
+  updateGlobalState: (
+    updater: {
+      restaurant?: RestaurantInfo
+      menu?: MenuItem[]
+      tables?: Table[]
+      orders?: Order[]
+    },
+    actionContext?: string
+  ) => void
+  navigateToHome: () => void
+}
+
+export default function CustomerPortal({
+  tableNumber,
+  restaurant,
+  menu,
+  orders,
+  tables,
+  updateGlobalState,
+  navigateToHome
+}: CustomerPortalProps) {
+  // UI states
+  const [activeCategory, setActiveCategory] = useState<string>('Tất cả')
+  const [cart, setCart] = useState<{ [id: string]: { quantity: number; notes: string } }>({})
+  const [isCartOpen, setIsCartOpen] = useState(false)
+  const [notes, setNotes] = useState('')
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mobile'>('cash')
+  const [activeTab, setActiveTab] = useState<'menu' | 'status'>('menu')
+  
+  // Rating states
+  const [showRatingModal, setShowRatingModal] = useState(false)
+  const [selectedOrderToRate, setSelectedOrderToRate] = useState<Order | null>(null)
+  const [ratingScore, setRatingScore] = useState(5)
+  const [commentText, setCommentText] = useState('')
+  const [showSuccessModal, setShowSuccessModal] = useState(false)
+
+  // Toast notification state
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
+
+  // Customer Name State (stored in localStorage)
+  const [customerName, setCustomerName] = useState<string>(() => {
+    return localStorage.getItem(`customer_name_table_${tableNumber}`) || ''
+  })
+
+  const handleCustomerNameChange = (val: string) => {
+    setCustomerName(val)
+    localStorage.setItem(`customer_name_table_${tableNumber}`, val)
+  }
+
+
+  const showToast = (msg: string) => {
+    setToastMessage(msg)
+    setTimeout(() => setToastMessage(null), 3000)
+  }
+
+  // Get active category elements
+  const categories = ['Tất cả', ...Array.from(new Set(menu.map(item => item.category)))]
+  
+  const filteredMenu = menu.filter(item => {
+    if (!item.available) return false
+    if (activeCategory === 'Tất cả') return true
+    return item.category === activeCategory
+  })
+
+  // Cart operations
+  const addToCart = (itemId: string) => {
+    setCart((prev: typeof cart) => {
+      const current = prev[itemId] || { quantity: 0, notes: '' }
+      return {
+        ...prev,
+        [itemId]: { ...current, quantity: current.quantity + 1 }
+      }
+    })
+    showToast('Đã thêm món vào giỏ hàng')
+  }
+
+  const updateCartQuantity = (itemId: string, delta: number) => {
+    setCart((prev: typeof cart) => {
+      const current = prev[itemId]
+      if (!current) return prev
+      const newQty = current.quantity + delta
+      if (newQty <= 0) {
+        const { [itemId]: _, ...rest } = prev
+        return rest
+      }
+      return {
+        ...prev,
+        [itemId]: { ...current, quantity: newQty }
+      }
+    })
+  }
+
+  const cartItemsCount = Object.values(cart).reduce((sum, item) => sum + item.quantity, 0)
+  
+  const cartTotal = Object.entries(cart).reduce((sum, [itemId, cartInfo]) => {
+    const dish = menu.find(d => d.id === itemId)
+    return sum + (dish ? dish.price * cartInfo.quantity : 0)
+  }, 0)
+
+  // Trigger calls to staff
+  const handleCallStaff = () => {
+    const updatedTables = tables.map(t => {
+      if (t.number === tableNumber) {
+        return { ...t, status: 'ordering' as const, activeCall: 'call_waiter' as const }
+      }
+      return t
+    })
+    updateGlobalState({ tables: updatedTables }, 'CALL_STAFF')
+    showToast('Đang gọi nhân viên phục vụ...')
+  }
+
+  const handleRequestBill = () => {
+    const updatedTables = tables.map(t => {
+      if (t.number === tableNumber) {
+        return { ...t, status: 'billing' as const, activeCall: 'request_bill' as const }
+      }
+      return t
+    })
+    updateGlobalState({ tables: updatedTables }, 'REQUEST_BILL')
+    showToast('Đã gửi yêu cầu thanh toán...')
+  }
+
+  // Submit Order to manager
+  const handlePlaceOrder = () => {
+    if (cartItemsCount === 0) return
+
+    // Get the current session ID from the table (if any)
+    const tableRecord = tables.find(t => t.number === tableNumber)
+    const currentSessionId = tableRecord?.sessionId || `session-${tableNumber}-${Date.now()}`
+
+    const orderItems: OrderItem[] = Object.entries(cart).map(([itemId, cartInfo]) => ({
+      menuItemId: itemId,
+      quantity: cartInfo.quantity,
+      notes: cartInfo.notes || notes
+    }))
+
+    const newOrder: Order = {
+      id: `order-${Date.now()}`,
+      tableNumber,
+      items: orderItems,
+      total: cartTotal,
+      status: 'pending',
+      paymentMethod,
+      timestamp: Date.now(),
+      sessionId: currentSessionId,
+      customerName: customerName.trim() || undefined
+    }
+
+
+    // Set Table to ordering, ensuring sessionId is set if it wasn't already
+    const updatedTables = tables.map(t => {
+      if (t.number === tableNumber) {
+        return { ...t, status: 'ordering' as const, sessionId: currentSessionId }
+      }
+      return t
+    })
+
+    const updatedOrders = [newOrder, ...orders]
+
+    updateGlobalState({ orders: updatedOrders, tables: updatedTables }, 'NEW_ORDER')
+    setCart({})
+    setNotes('')
+    setIsCartOpen(false)
+    setActiveTab('status')
+    setShowSuccessModal(true)
+  }
+
+  // Submit Customer rating
+  const handleSubmitRating = () => {
+    if (!selectedOrderToRate) return
+
+    const updatedOrders = orders.map(o => {
+      if (o.id === selectedOrderToRate.id) {
+        return { ...o, rating: ratingScore, comment: commentText }
+      }
+      return o
+    })
+
+    updateGlobalState({ orders: updatedOrders }, 'RATE_ORDER')
+    setShowRatingModal(false)
+    setSelectedOrderToRate(null)
+    setCommentText('')
+    showToast('Cảm ơn bạn đã đánh giá món ăn!')
+  }
+
+  // Get active table calls & orders
+  // Only show orders belonging to the CURRENT guest session to prevent
+  // new customers from seeing or rating orders from a previous party.
+  const currentTableStatus = tables.find(t => t.number === tableNumber)
+  const currentSessionId = currentTableStatus?.sessionId
+  const currentTableOrders = orders.filter(o => {
+    if (o.tableNumber !== tableNumber) return false
+    // If the table has a sessionId, only show orders with a matching sessionId.
+    // Orders without sessionId (legacy data) are hidden once the table has a session.
+    if (currentSessionId) return o.sessionId === currentSessionId
+    // Fallback for tables that haven't had a session ID assigned yet:
+    // show only non-completed orders so at least the current visit is visible.
+    return o.status !== 'completed'
+  })
+
+
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--color-bg-base)', position: 'relative' }}>
+      
+      {/* Mobile Top Header */}
+      <header className="header-sticky" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 'var(--spacing-md)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
+          <button className="btn-ghost" style={{ padding: 'var(--spacing-xs)', border: 'none', minHeight: '40px', minWidth: '40px' }} onClick={navigateToHome}>
+            <ChevronLeft size={24} />
+          </button>
+          <div>
+            <h1 style={{ fontSize: '1.25rem', fontFamily: 'var(--font-body)', fontWeight: 800 }}>{restaurant.name}</h1>
+            <p style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>
+              Bàn {tableNumber} • Trạng thái: {
+                currentTableStatus?.status === 'billing' ? 'Chờ tính tiền' :
+                currentTableStatus?.status === 'ordering' ? 'Đang phục vụ' : 'Bàn trống'
+              }
+            </p>
+          </div>
+        </div>
+        
+        {/* Support Buttons */}
+        <div style={{ display: 'flex', gap: 'var(--spacing-sm)' }}>
+          <button 
+            className="btn-secondary" 
+            style={{ padding: 'var(--spacing-sm)', borderRadius: 'var(--radius-full)', minHeight: '40px', minWidth: '40px', color: 'var(--color-primary)' }}
+            onClick={handleCallStaff}
+            title="Gọi nhân viên"
+          >
+            <Bell size={18} />
+          </button>
+          <button 
+            className="btn-secondary" 
+            style={{ padding: 'var(--spacing-sm)', borderRadius: 'var(--radius-full)', minHeight: '40px', minWidth: '40px', color: 'var(--color-success)' }}
+            onClick={handleRequestBill}
+            title="Yêu cầu thanh toán"
+          >
+            <Receipt size={18} />
+          </button>
+        </div>
+      </header>
+
+      {/* Tabs Menu / Status */}
+      <nav style={{ display: 'flex', borderBottom: '1px solid var(--color-border)', backgroundColor: 'var(--color-bg-surface)' }}>
+        <button 
+          style={{ flex: 1, background: 'none', border: 'none', borderBottom: activeTab === 'menu' ? '3px solid var(--color-primary)' : 'none', color: activeTab === 'menu' ? 'var(--color-primary)' : 'var(--color-text-muted)', fontWeight: 700, height: '48px' }}
+          onClick={() => setActiveTab('menu')}
+        >
+          Thực Đơn
+        </button>
+        <button 
+          style={{ flex: 1, background: 'none', border: 'none', borderBottom: activeTab === 'status' ? '3px solid var(--color-primary)' : 'none', color: activeTab === 'status' ? 'var(--color-primary)' : 'var(--color-text-muted)', fontWeight: 700, height: '48px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 'var(--spacing-xs)' }}
+          onClick={() => setActiveTab('status')}
+        >
+          Đơn Của Bạn
+          {currentTableOrders.filter(o => o.status === 'pending').length > 0 && (
+            <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--color-error)' }}></span>
+          )}
+        </button>
+      </nav>
+
+      {/* Main Content Area */}
+      <main style={{ flex: 1, paddingBottom: '80px' }}>
+        {activeTab === 'menu' ? (
+          <>
+            {/* Customer Name Input (To help staff recognize them at checkout) */}
+            <div style={{ padding: 'var(--spacing-md) var(--spacing-md) 0 var(--spacing-md)', backgroundColor: 'var(--color-bg-surface)' }}>
+              <div style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: 'var(--spacing-sm)', 
+                padding: 'var(--spacing-sm) var(--spacing-md)', 
+                backgroundColor: 'oklch(97% 0.015 60)', 
+                borderRadius: 'var(--radius-md)', 
+                border: '1px solid oklch(93% 0.03 60)' 
+              }}>
+                <span style={{ fontSize: '1.2rem', flexShrink: 0 }}>👤</span>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <label htmlFor="cust-name-input" style={{ fontSize: '0.72rem', fontWeight: 700, color: 'oklch(60% 0.2 55)' }}>Tên xưng hô gợi nhớ (nhân viên dễ tìm khi thanh toán):</label>
+                  <input
+                    id="cust-name-input"
+                    type="text"
+                    placeholder="Nhập tên của bạn (Ví dụ: Anh Tuấn, Chị Lan...)"
+                    value={customerName}
+                    onChange={(e) => handleCustomerNameChange(e.target.value)}
+                    style={{
+                      border: 'none',
+                      background: 'transparent',
+                      borderBottom: '1px solid var(--color-border)',
+                      padding: '4px 0',
+                      fontSize: '0.875rem',
+                      fontWeight: 600,
+                      outline: 'none',
+                      color: 'var(--color-text-main)',
+                      width: '100%',
+                      borderRadius: 0
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Category horizontal scroller */}
+            <div style={{ display: 'flex', gap: 'var(--spacing-sm)', overflowX: 'auto', padding: 'var(--spacing-md) var(--spacing-md)', scrollbarWidth: 'none', backgroundColor: 'var(--color-bg-surface)' }}>
+              {categories.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setActiveCategory(cat)}
+                  style={{
+                    padding: 'var(--spacing-sm) var(--spacing-md)',
+                    borderRadius: 'var(--radius-full)',
+                    whiteSpace: 'nowrap',
+                    backgroundColor: activeCategory === cat ? 'var(--color-primary)' : 'var(--color-bg-base)',
+                    color: activeCategory === cat ? 'var(--color-text-inverse)' : 'var(--color-text-main)',
+                    fontSize: '0.875rem',
+                    fontWeight: 600,
+                    minHeight: '38px',
+                    transition: 'var(--transition-fast)'
+                  }}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+
+            {/* Food Grid */}
+            <div className="layout-container" style={{ padding: 'var(--spacing-md)' }}>
+              <div className="grid-responsive">
+                {filteredMenu.map(dish => (
+                  <article key={dish.id} className="card" style={{ padding: 'var(--spacing-sm)', gap: 'var(--spacing-sm)' }}>
+                    <div className="card-image-wrapper" style={{ margin: 0, borderRadius: 'var(--radius-sm)' }}>
+                      <img src={dish.image} alt={dish.name} className="card-image" />
+                    </div>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, gap: 'var(--spacing-xs)' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>{dish.category}</span>
+                      <h3 style={{ fontSize: '1.1rem', fontFamily: 'var(--font-body)', fontWeight: 700, color: 'var(--color-text-main)' }}>{dish.name}</h3>
+                      <p style={{ color: 'var(--color-primary)', fontWeight: 800, fontSize: '1.15rem', marginTop: 'auto' }}>
+                        {dish.price.toLocaleString('vi-VN')} đ
+                      </p>
+                      
+                      <button 
+                        className="btn-primary" 
+                        style={{ width: '100%', minHeight: '40px', padding: 'var(--spacing-sm) var(--spacing-md)', marginTop: 'var(--spacing-sm)' }}
+                        onClick={() => addToCart(dish.id)}
+                      >
+                        Thêm món
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+
+              {filteredMenu.length === 0 && (
+                <div style={{ textAlign: 'center', padding: 'var(--spacing-xxl) var(--spacing-md)', color: 'var(--color-text-muted)' }}>
+                  <HelpCircle size={48} style={{ strokeWidth: 1.5, marginBottom: 'var(--spacing-sm)' }} />
+                  <p>Danh mục này hiện chưa có món nào sẵn sàng.</p>
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          /* Order Status Tracking tab */
+          <div className="layout-container" style={{ padding: 'var(--spacing-md)', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+            <h2 style={{ fontSize: '1.25rem', fontFamily: 'var(--font-body)', fontWeight: 700, marginBottom: 'var(--spacing-xs)' }}>Lịch sử đặt món bàn {tableNumber}</h2>
+            
+            {/* Friendly reminder banner */}
+            <div className="card" style={{ 
+              backgroundColor: 'oklch(97% 0.01 60)', 
+              borderColor: 'var(--color-primary-light)', 
+              padding: 'var(--spacing-md)', 
+              gap: 'var(--spacing-xs)',
+              borderLeft: '4px solid var(--color-primary)',
+              transform: 'none'
+            }}>
+              <div style={{ display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
+                <span style={{ fontSize: '1.2rem' }}>💡</span>
+                <strong style={{ fontSize: '0.875rem', color: 'var(--color-primary)' }}>Lưu ý nhỏ:</strong>
+              </div>
+              <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', lineHeight: '1.5', margin: 0 }}>
+                Nếu vô tình đóng trang này, quý khách chỉ cần <strong>quét lại mã QR tại bàn</strong>. Hệ thống sẽ hiển thị lại mục <strong>"Đơn Của Bạn"</strong> để tiếp tục theo dõi tiến độ phục vụ và chấm điểm đánh giá chất lượng món ăn!
+              </p>
+            </div>
+
+            {currentTableOrders.map(order => (
+              <div key={order.id} className="card" style={{ padding: 'var(--spacing-md)', gap: 'var(--spacing-sm)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--color-border)', paddingBottom: 'var(--spacing-sm)' }}>
+                  <div>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>#{order.id.slice(-6)}</span>
+                    <p style={{ fontSize: '0.8rem', fontWeight: 600 }}>{new Date(order.timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</p>
+                  </div>
+                  
+                  {/* Status Badge */}
+                  <div>
+                    {order.status === 'pending' && <span className="badge badge-error">Đang chờ bếp</span>}
+                    {order.status === 'served' && <span className="badge badge-info">Đã phục vụ</span>}
+                    {order.status === 'completed' && <span className="badge badge-success">Đã hoàn thành</span>}
+                  </div>
+                </div>
+
+                {/* Items details */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-xs)', margin: 'var(--spacing-sm) 0' }}>
+                  {order.items.map(item => {
+                    const dish = menu.find(d => d.id === item.menuItemId)
+                    return (
+                      <div key={item.menuItemId} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9rem' }}>
+                        <span>
+                          <strong>{item.quantity}x</strong> {dish?.name || 'Món ăn'}
+                          {item.notes && <span style={{ display: 'block', fontSize: '0.75rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>Ghi chú: {item.notes}</span>}
+                        </span>
+                        <span style={{ color: 'var(--color-text-muted)' }}>{((dish?.price || 0) * item.quantity).toLocaleString('vi-VN')} đ</span>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--color-border)', paddingTop: 'var(--spacing-sm)', fontWeight: 700 }}>
+                  <span style={{ fontSize: '0.9rem' }}>Tổng cộng:</span>
+                  <span style={{ color: 'var(--color-primary)' }}>{order.total.toLocaleString('vi-VN')} đ</span>
+                </div>
+
+                {/* Feedback section - Show button if order status is served or completed & hasn't been rated yet */}
+                {order.status !== 'pending' && !order.rating && (
+                  <button 
+                    className="btn-secondary" 
+                    style={{ width: '100%', minHeight: '38px', padding: 'var(--spacing-xs) var(--spacing-sm)', marginTop: 'var(--spacing-sm)', display: 'flex', gap: 'var(--spacing-xs)', fontSize: '0.875rem' }}
+                    onClick={() => {
+                      setSelectedOrderToRate(order)
+                      setShowRatingModal(true)
+                    }}
+                  >
+                    <Star size={16} fill="var(--color-primary)" stroke="var(--color-primary)" /> Đánh giá dịch vụ
+                  </button>
+                )}
+
+                {order.rating && (
+                  <div style={{ marginTop: 'var(--spacing-sm)', padding: 'var(--spacing-sm)', backgroundColor: 'var(--color-bg-base)', borderRadius: 'var(--radius-sm)', fontSize: '0.85rem' }}>
+                    <div style={{ display: 'flex', gap: '4px', marginBottom: '4px' }}>
+                      {Array.from({ length: 5 }).map((_, idx) => (
+                        <Star key={idx} size={12} fill={idx < (order.rating || 0) ? 'var(--color-primary)' : 'transparent'} stroke="var(--color-primary)" />
+                      ))}
+                    </div>
+                    {order.comment && <p style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>"{order.comment}"</p>}
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {currentTableOrders.length === 0 && (
+              <div style={{ textAlign: 'center', padding: 'var(--spacing-xxl) var(--spacing-md)', color: 'var(--color-text-muted)' }}>
+                <CheckCircle size={48} style={{ strokeWidth: 1.5, color: 'var(--color-border)', marginBottom: 'var(--spacing-sm)' }} />
+                <p>Bạn chưa đặt món nào. Quét thực đơn để chọn món ngay nhé!</p>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+
+      {/* Floating Bottom Cart Bar */}
+      {cartItemsCount > 0 && activeTab === 'menu' && (
+        <div style={{ position: 'fixed', bottom: 'var(--spacing-md)', left: 'var(--spacing-md)', right: 'var(--spacing-md)', zIndex: 'var(--z-sticky)' }}>
+          <button 
+            className="btn-primary" 
+            style={{ width: '100%', borderRadius: 'var(--radius-full)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--spacing-md) var(--spacing-lg)' }}
+            onClick={() => setIsCartOpen(true)}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
+              <ShoppingBag size={20} />
+              <span style={{ fontWeight: 800 }}>Xem giỏ hàng ({cartItemsCount})</span>
+            </div>
+            <span style={{ fontWeight: 800 }}>{cartTotal.toLocaleString('vi-VN')} đ</span>
+          </button>
+        </div>
+      )}
+
+      {/* Cart Drawer Modal */}
+      {isCartOpen && (
+        <div className="dialog-backdrop" onClick={() => setIsCartOpen(false)}>
+          <div className="dialog-content" style={{ maxHeight: '90vh', display: 'flex', flexDirection: 'column' }} onClick={(e) => e.stopPropagation()}>
+            <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--color-border)', paddingBottom: 'var(--spacing-sm)' }}>
+              <h2 style={{ fontSize: '1.25rem', fontFamily: 'var(--font-body)', fontWeight: 700 }}>Giỏ hàng bàn {tableNumber}</h2>
+              <button className="btn-ghost" style={{ border: 'none', background: 'none', padding: 'var(--spacing-xs)', minHeight: '40px', minWidth: '40px' }} onClick={() => setIsCartOpen(false)}>
+                ✕
+              </button>
+            </header>
+
+            {/* Cart Items list */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--spacing-md) 0', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+              {Object.entries(cart).map(([itemId, cartInfo]) => {
+                const dish = menu.find(d => d.id === itemId)
+                if (!dish) return null
+
+                return (
+                  <div key={itemId} style={{ display: 'flex', gap: 'var(--spacing-md)', alignItems: 'center', borderBottom: '1px solid var(--color-bg-elevated)', paddingBottom: 'var(--spacing-md)' }}>
+                    <img src={dish.image} alt={dish.name} style={{ width: '60px', height: '60px', borderRadius: 'var(--radius-sm)', objectFit: 'cover' }} />
+                    <div style={{ flex: 1 }}>
+                      <h4 style={{ fontSize: '0.95rem', fontWeight: 700 }}>{dish.name}</h4>
+                      <p style={{ color: 'var(--color-primary)', fontWeight: 700, fontSize: '0.9rem' }}>{dish.price.toLocaleString('vi-VN')} đ</p>
+                      
+                      {/* Item Ghi chú */}
+                      <input 
+                        type="text" 
+                        placeholder="Ghi chú thêm (cay, ít đá...)" 
+                        className="form-control"
+                        style={{ height: '32px', minHeight: '32px', padding: '4px 8px', fontSize: '0.8rem', width: '100%', marginTop: 'var(--spacing-xs)' }}
+                        value={cartInfo.notes}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                          const val = e.target.value
+                          setCart((prev: typeof cart) => ({
+                            ...prev,
+                            [itemId]: { ...prev[itemId], notes: val }
+                          }))
+                        }}
+                      />
+                    </div>
+                    
+                    {/* Controls quantity */}
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 'var(--spacing-sm)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-full)', padding: '2px' }}>
+                        <button className="star-btn" style={{ minWidth: '28px', minHeight: '28px', padding: 0, background: 'none' }} onClick={() => updateCartQuantity(itemId, -1)}>
+                          <Minus size={14} />
+                        </button>
+                        <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>{cartInfo.quantity}</span>
+                        <button className="star-btn" style={{ minWidth: '28px', minHeight: '28px', padding: 0, background: 'none' }} onClick={() => updateCartQuantity(itemId, 1)}>
+                          <Plus size={14} />
+                        </button>
+                      </div>
+                      <button className="star-btn" style={{ minWidth: '28px', minHeight: '28px', padding: 0, color: 'var(--color-text-muted)' }} onClick={() => updateCartQuantity(itemId, -cartInfo.quantity)}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Payment selection & placing order */}
+            <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 'var(--spacing-md)', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+              
+              {/* Customer Name input */}
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label" style={{ fontWeight: 700 }}>Tên người gọi món (để nhân viên dễ tìm khi thanh toán):</label>
+                <input 
+                  type="text" 
+                  className="form-control"
+                  placeholder="Nhập tên của bạn (Ví dụ: Anh Tuấn, Chị Lan...)" 
+                  value={customerName}
+                  onChange={(e) => handleCustomerNameChange(e.target.value)}
+                />
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-xs)' }}>
+                <span className="form-label">Chọn hình thức thanh toán:</span>
+                <div style={{ display: 'flex', gap: 'var(--spacing-sm)' }}>
+                  <button 
+                    className="btn-ghost" 
+                    style={{ flex: 1, minHeight: '40px', backgroundColor: paymentMethod === 'cash' ? 'var(--color-primary-light)' : 'transparent', borderColor: paymentMethod === 'cash' ? 'var(--color-primary)' : 'var(--color-border)', color: paymentMethod === 'cash' ? 'var(--color-primary)' : 'var(--color-text-main)', fontSize: '0.85rem' }}
+                    onClick={() => setPaymentMethod('cash')}
+                  >
+                    Tiền mặt
+                  </button>
+                  <button 
+                    className="btn-ghost" 
+                    style={{ flex: 1, minHeight: '40px', backgroundColor: paymentMethod === 'card' ? 'var(--color-primary-light)' : 'transparent', borderColor: paymentMethod === 'card' ? 'var(--color-primary)' : 'var(--color-border)', color: paymentMethod === 'card' ? 'var(--color-primary)' : 'var(--color-text-main)', fontSize: '0.85rem' }}
+                    onClick={() => setPaymentMethod('card')}
+                  >
+                    Quẹt thẻ
+                  </button>
+                  <button 
+                    className="btn-ghost" 
+                    style={{ flex: 1, minHeight: '40px', backgroundColor: paymentMethod === 'mobile' ? 'var(--color-primary-light)' : 'transparent', borderColor: paymentMethod === 'mobile' ? 'var(--color-primary)' : 'var(--color-border)', color: paymentMethod === 'mobile' ? 'var(--color-primary)' : 'var(--color-text-main)', fontSize: '0.85rem' }}
+                    onClick={() => setPaymentMethod('mobile')}
+                  >
+                    Chuyển khoản
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: '1.1rem' }}>
+                <span>Tổng cộng:</span>
+                <span style={{ color: 'var(--color-primary)' }}>{cartTotal.toLocaleString('vi-VN')} đ</span>
+              </div>
+
+              <button className="btn-primary" style={{ width: '100%' }} onClick={handlePlaceOrder}>
+                Gửi yêu cầu Bếp đặt món
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Review Feedback Star Modal */}
+      {showRatingModal && selectedOrderToRate && (
+        <div className="dialog-backdrop" onClick={() => setShowRatingModal(false)}>
+          <div className="dialog-content" onClick={(e) => e.stopPropagation()}>
+            <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--spacing-md)' }}>
+              <h2 style={{ fontSize: '1.25rem', fontFamily: 'var(--font-body)', fontWeight: 700 }}>Đánh giá bữa ăn</h2>
+              <button className="btn-ghost" style={{ border: 'none', background: 'none', padding: 'var(--spacing-xs)', minHeight: '40px', minWidth: '40px' }} onClick={() => setShowRatingModal(false)}>
+                ✕
+              </button>
+            </header>
+
+            <div style={{ textAlign: 'center', marginBottom: 'var(--spacing-lg)' }}>
+              <p style={{ color: 'var(--color-text-muted)', marginBottom: 'var(--spacing-md)' }}>Hãy chấm điểm và cho chúng tôi biết cảm nhận của bạn nhé!</p>
+              
+              {/* Stars Score Selector */}
+              <div className="rating-stars">
+                {Array.from({ length: 5 }).map((_, idx) => {
+                  const score = idx + 1
+                  return (
+                    <button key={score} className="star-btn" onClick={() => setRatingScore(score)}>
+                      <Star size={36} className={`star-icon ${score <= ratingScore ? 'active' : ''}`} />
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Nhận xét của bạn (không bắt buộc):</label>
+              <textarea 
+                className="form-control" 
+                rows={3} 
+                placeholder="Món ăn rất vừa vị, nhân viên phục vụ nhanh..."
+                style={{ resize: 'none', fontFamily: 'var(--font-body)', padding: 'var(--spacing-sm)' }}
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+              />
+            </div>
+
+            <button className="btn-primary" style={{ width: '100%', marginTop: 'var(--spacing-md)' }} onClick={handleSubmitRating}>
+              Gửi Đánh Giá
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Order Success Modal with QR Re-scan Reminder */}
+      {showSuccessModal && (
+        <div className="dialog-backdrop" onClick={() => setShowSuccessModal(false)}>
+          <div className="dialog-content" style={{ textAlign: 'center', padding: 'var(--spacing-xl)', gap: 'var(--spacing-md)', display: 'flex', flexDirection: 'column', alignItems: 'center' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'oklch(93% 0.04 140)', color: 'var(--color-success)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 'var(--spacing-sm)' }}>
+              <CheckCircle size={36} strokeWidth={2.5} />
+            </div>
+            
+            <h2 style={{ fontSize: '1.4rem', fontFamily: 'var(--font-display)', fontWeight: 800 }}>Gửi đơn thành công!</h2>
+            <p style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', lineHeight: '1.6' }}>
+              Bếp nhà hàng đã tiếp nhận món ăn của bạn và đang tiến hành chế biến.
+            </p>
+
+            <div style={{ backgroundColor: 'oklch(97% 0.01 60)', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)', padding: 'var(--spacing-md)', margin: 'var(--spacing-sm) 0', textAlign: 'left' }}>
+              <strong style={{ fontSize: '0.85rem', color: 'var(--color-primary)', display: 'flex', alignItems: 'center', gap: '4px', marginBottom: '4px' }}>
+                💡 Mẹo nhỏ dành cho bạn:
+              </strong>
+              <p style={{ fontSize: '0.8rem', color: 'var(--color-text-main)', margin: 0, lineHeight: '1.5' }}>
+                Nếu vô tình đóng trình duyệt, quý khách chỉ cần <strong>quét lại mã QR tại bàn</strong>. Hệ thống sẽ tự động khôi phục và hiển thị lại phần <strong>"Đơn Của Bạn"</strong> để bạn theo dõi tiến độ phục vụ và chấm điểm đánh giá món ăn sau khi dùng xong!
+              </p>
+            </div>
+
+            <button className="btn-primary" style={{ width: '100%', marginTop: 'var(--spacing-sm)' }} onClick={() => setShowSuccessModal(false)}>
+              Đồng ý và Theo dõi đơn
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Alert Popups */}
+      {toastMessage && (
+        <div className="toast-container">
+          <div className="toast">
+            <span style={{ fontSize: '1.2rem' }}>ℹ️</span>
+            <span>{toastMessage}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
