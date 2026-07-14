@@ -16,6 +16,7 @@ Quy trình đặt món:
 3. Theo dõi trạng thái & đánh giá 
 <img width="1170" height="1999" alt="1784049471226_210255510540589861_1170502276122500593_def71040019eb4f912c4a671ac368f9b" src="https://github.com/user-attachments/assets/72bcb63d-f3b5-4be1-88ae-9d6e40c12780" />
 ---------------------------------
+
 |Giao diện quản lý|
 
 <img width="1734" height="860" alt="image" src="https://github.com/user-attachments/assets/78272245-101d-46d7-ba44-048f0e0b2ea3" />
