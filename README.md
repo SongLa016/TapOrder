@@ -30,7 +30,7 @@ Quy trình đặt món:
 ## ✨ Tính Năng Nổi Bật
 
 ### 🧑‍💻 Dành Cho Chủ Quán / Người Quản Lý (Dashboard)
-*   **Bảng điều khiển Kanban Realtime:** Phân chia đơn hàng thành 3 cột trực quan (Chờ bếp 🔴 - Đã phục vụ 🔵 - Hoàn thành ✅) giúp tránh sót đơn hàng.
+*   **Bảng điều khiển Realtime:** Phân chia đơn hàng thành 3 cột trực quan (Chờ bếp 🔴 - Đã phục vụ 🔵 - Hoàn thành ✅) giúp tránh sót đơn hàng.
 *   **Sơ đồ bàn ăn trực tuyến:** Hiển thị trực quan trạng thái từng bàn (Bàn trống, Đang ăn, Gọi phục vụ, Yêu cầu thanh toán) thời gian thực.
 *   **Đặt tên bàn tùy chỉnh:** Đổi tên bàn nhanh (Ví dụ: *Bàn 1 Tầng 2*, *VIP 01*, *Sân Vườn*) thay vì chỉ dùng số bàn thô.
 *   **Báo cáo & Thống kê doanh số nâng cao:**
