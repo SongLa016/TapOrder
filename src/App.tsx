@@ -55,7 +55,7 @@ const DEFAULT_MENU: MenuItem[] = [
     id: 'food-6',
     name: 'Bánh Mì Đặc Biệt',
     price: 35000,
-    image: 'https://images.unsplash.com/photo-1600454021970-351feb2a5149?w=500&auto=format&fit=crop&q=80',
+    image: 'https://tse4.mm.bing.net/th/id/OIP.MzrUVQRmy9lCS6MCQVYNcgHaE7?r=0&rs=1&pid=ImgDetMain&o=7&rm=3',
     category: 'Khai vị',
     available: true
   }
@@ -120,9 +120,27 @@ export default function App() {
     }
   }
 
-  // Lấy Mã Quán (Tenant ID) từ đường dẫn URL
-  const urlParams = new URLSearchParams(window.location.search)
-  const tenantId = urlParams.get('r')
+  // Routing Logic: detect parameters from URL search
+  const [params, setParams] = useState(() => new URLSearchParams(window.location.search))
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setParams(new URLSearchParams(window.location.search))
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
+
+  const navigateTo = (queryParams: string) => {
+    const newUrl = queryParams ? `${window.location.pathname}?${queryParams}` : window.location.pathname
+    window.history.pushState({}, '', newUrl)
+    setParams(new URLSearchParams(queryParams))
+  }
+
+  // Lấy Mã Quán (Tenant ID) và Router params từ URL
+  const tenantId = params.get('r')
+  const tableParam = params.get('table')
+  const roleParam = params.get('role')
 
   // Global States
   const [restaurant, setRestaurant] = useState<RestaurantInfo>(() => {
@@ -284,25 +302,7 @@ export default function App() {
     }).catch(err => console.error('Error broadcasting update to server:', err))
   }
 
-  // Routing Logic: detect parameters from URL search
-  const [params, setParams] = useState(() => new URLSearchParams(window.location.search))
 
-  useEffect(() => {
-    const handlePopState = () => {
-      setParams(new URLSearchParams(window.location.search))
-    }
-    window.addEventListener('popstate', handlePopState)
-    return () => window.removeEventListener('popstate', handlePopState)
-  }, [])
-
-  const navigateTo = (queryParams: string) => {
-    const newUrl = queryParams ? `${window.location.pathname}?${queryParams}` : window.location.pathname
-    window.history.pushState({}, '', newUrl)
-    setParams(new URLSearchParams(queryParams))
-  }
-
-  const tableParam = params.get('table')
-  const roleParam = params.get('role')
 
   // Render correct view based on URL route
   if (roleParam === 'admin') {
