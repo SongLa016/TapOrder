@@ -204,7 +204,7 @@ export default function App() {
           }
         })
       })
-      .catch(err => {
+      .catch(() => {
         console.warn('QROrder: Realtime sync server not detected. Operating in LocalStorage-only mode.')
       })
 
