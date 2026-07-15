@@ -522,3 +522,52 @@ input:checked + .toggle-slider::before {
   }
 }
 
+/* ========================================================= */
+/* UX UPGRADES: Micro-interactions & Glassmorphism           */
+/* ========================================================= */
+
+/* Tactile button press (Haptic feel) */
+button:active, .btn-active-scale:active {
+  transform: scale(0.96);
+}
+@media (prefers-reduced-motion: reduce) {
+  button:active, .btn-active-scale:active {
+    transform: none;
+  }
+}
+
+/* Glassmorphism utilities */
+.glass-panel {
+  background: color-mix(in oklch, var(--color-bg-surface) 75%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid color-mix(in oklch, var(--color-border) 50%, transparent);
+}
+
+.glass-card {
+  background: color-mix(in oklch, var(--color-bg-surface) 70%, transparent);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid color-mix(in oklch, var(--color-border) 50%, transparent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-high);
+}
+
+/* Animations */
+@keyframes fadeInUp {
+  0% { opacity: 0; transform: translateY(30px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in-up {
+  opacity: 0; /* Hidden by default until animation runs */
+  animation: fadeInUp 0.6s var(--ease-expo) forwards;
+}
+
+/* Stagger delays for elegant loading */
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
+.stagger-6 { animation-delay: 0.3s; }

@@ -66,6 +66,9 @@ export default function CustomerPortal({
     return localStorage.getItem(`customer_name_table_${tableNumber}`) || ''
   })
 
+  // Welcome Screen state
+  const [showWelcomeScreen, setShowWelcomeScreen] = useState<boolean>(!localStorage.getItem(`customer_name_table_${tableNumber}`))
+
   // Local storage guest session ID
   const sessionKey = `qr_active_session_table_${tableNumber}`
   const [localSessionId, setLocalSessionId] = useState<string>(() => {
@@ -134,6 +137,11 @@ export default function CustomerPortal({
 
   // Cart operations
   const addToCart = (itemId: string) => {
+    // Phản hồi xúc giác - rung nhẹ 50ms khi bấm (Haptic feedback)
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate([50])
+    }
+
     const dish = menu.find(d => d.id === itemId)
     if (!dish || !dish.available) {
       showToast('Món ăn hiện tại không khả dụng.')
@@ -294,6 +302,72 @@ export default function CustomerPortal({
 
 
   return (
+    <>
+    {showWelcomeScreen ? (
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--color-bg-base)', position: 'relative', overflow: 'hidden' }}>
+        {/* Background Banner */}
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '60vh', backgroundImage: `url('https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800&auto=format&fit=crop&q=80')`, backgroundSize: 'cover', backgroundPosition: 'center', zIndex: 0 }}>
+          <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to bottom, rgba(0,0,0,0.1) 0%, var(--color-bg-base) 100%)' }} />
+        </div>
+
+        {/* Content */}
+        <div className="animate-fade-in-up" style={{ position: 'relative', zIndex: 1, marginTop: 'auto', padding: 'var(--spacing-xl) var(--spacing-md)', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 'var(--spacing-lg)' }}>
+          <div>
+            <h1 style={{ fontSize: '2.5rem', marginBottom: 'var(--spacing-xs)', textShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>{restaurant.name}</h1>
+            <p style={{ color: 'var(--color-text-muted)', fontSize: '1.1rem', fontWeight: 600, textShadow: '0 1px 4px rgba(0,0,0,0.1)' }}>Bàn số {tableNumber}</p>
+          </div>
+
+          <div className="glass-card" style={{ width: '100%', padding: 'var(--spacing-xl) var(--spacing-md)', display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+            <h2 style={{ fontSize: '1.25rem' }}>Chào mừng quý khách! 👋</h2>
+            <p style={{ fontSize: '0.9rem', color: 'var(--color-text-muted)' }}>Vui lòng nhập tên xưng hô để nhân viên phục vụ bạn chu đáo nhất.</p>
+            
+            <input
+              type="text"
+              placeholder="Ví dụ: Anh Tuấn, Chị Lan..."
+              value={customerName}
+              onChange={(e) => setCustomerName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  if (!customerName.trim()) {
+                    showToast('Vui lòng nhập tên của bạn!')
+                    return
+                  }
+                  localStorage.setItem(`customer_name_table_${tableNumber}`, customerName)
+                  setShowWelcomeScreen(false)
+                }
+              }}
+              style={{ width: '100%', padding: '16px', fontSize: '1.1rem', textAlign: 'center', borderRadius: 'var(--radius-md)', border: '2px solid var(--color-border)', backgroundColor: 'var(--color-bg-surface)', fontWeight: 600, transition: 'var(--transition-fast)' }}
+              autoFocus
+            />
+
+            <button 
+              className="btn-primary btn-active-scale" 
+              onClick={() => {
+                if (!customerName.trim()) {
+                  showToast('Vui lòng nhập tên của bạn!')
+                  return
+                }
+                localStorage.setItem(`customer_name_table_${tableNumber}`, customerName)
+                setShowWelcomeScreen(false)
+              }}
+              style={{ width: '100%', minHeight: '54px', fontSize: '1.1rem', fontWeight: 700, borderRadius: 'var(--radius-md)', marginTop: 'var(--spacing-sm)' }}
+            >
+              Bắt Đầu Gọi Món
+            </button>
+          </div>
+        </div>
+
+        {/* Welcome Screen Toast */}
+        {toastMessage && (
+          <div className="toast-container">
+            <div className="toast">
+              <span style={{ fontSize: '1.2rem' }}>ℹ️</span>
+              <span>{toastMessage}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    ) : (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', backgroundColor: 'var(--color-bg-base)', position: 'relative' }}>
       
       {/* Mobile Top Header */}
@@ -357,40 +431,22 @@ export default function CustomerPortal({
       <main style={{ flex: 1, paddingBottom: '80px' }}>
         {activeTab === 'menu' ? (
           <>
-            {/* Customer Name Input (To help staff recognize them at checkout) */}
+            {/* Beautiful Hero Banner for Menu */}
             <div style={{ padding: 'var(--spacing-md) var(--spacing-md) 0 var(--spacing-md)', backgroundColor: 'var(--color-bg-surface)' }}>
               <div style={{ 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: 'var(--spacing-sm)', 
-                padding: 'var(--spacing-sm) var(--spacing-md)', 
-                backgroundColor: 'oklch(97% 0.015 60)', 
+                height: '140px', 
                 borderRadius: 'var(--radius-md)', 
-                border: '1px solid oklch(93% 0.03 60)' 
+                backgroundImage: `url('https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800&auto=format&fit=crop&q=80')`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                position: 'relative',
+                overflow: 'hidden',
+                display: 'flex',
+                alignItems: 'flex-end',
+                padding: 'var(--spacing-md)'
               }}>
-                <span style={{ fontSize: '1.2rem', flexShrink: 0 }}>👤</span>
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <label htmlFor="cust-name-input" style={{ fontSize: '0.72rem', fontWeight: 700, color: 'oklch(60% 0.2 55)' }}>Tên xưng hô gợi nhớ (nhân viên dễ tìm khi thanh toán):</label>
-                  <input
-                    id="cust-name-input"
-                    type="text"
-                    placeholder="Nhập tên của bạn (Ví dụ: Anh Tuấn, Chị Lan...)"
-                    value={customerName}
-                    onChange={(e) => handleCustomerNameChange(e.target.value)}
-                    style={{
-                      border: 'none',
-                      background: 'transparent',
-                      borderBottom: '1px solid var(--color-border)',
-                      padding: '4px 0',
-                      fontSize: '0.875rem',
-                      fontWeight: 600,
-                      outline: 'none',
-                      color: 'var(--color-text-main)',
-                      width: '100%',
-                      borderRadius: 0
-                    }}
-                  />
-                </div>
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 100%)' }} />
+                <h2 style={{ position: 'relative', zIndex: 1, color: 'white', fontSize: '1.2rem', margin: 0, textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}>Thực đơn hôm nay có gì ngon?</h2>
               </div>
             </div>
 
@@ -420,29 +476,35 @@ export default function CustomerPortal({
             {/* Food Grid */}
             <div className="layout-container" style={{ padding: 'var(--spacing-md)' }}>
               <div className="grid-responsive">
-                {filteredMenu.map(dish => (
-                  <article key={dish.id} className="card" style={{ padding: 'var(--spacing-sm)', gap: 'var(--spacing-sm)' }}>
-                    <div className="card-image-wrapper" style={{ margin: 0, borderRadius: 'var(--radius-sm)' }}>
-                      <img src={dish.image} alt={dish.name} className="card-image" />
+                {filteredMenu.map((dish, index) => {
+                  const staggerClass = `stagger-${Math.min(index + 1, 6)}`
+                  return (
+                  <article key={dish.id} className={`card animate-fade-in-up ${staggerClass}`} style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', border: 'none', boxShadow: 'var(--shadow-low)' }}>
+                    <div className="card-image-wrapper" style={{ margin: 0, borderRadius: 0, height: '160px' }}>
+                      <img src={dish.image} alt={dish.name} className="card-image" style={{ objectFit: 'cover', height: '100%', width: '100%' }} />
                     </div>
                     
-                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, gap: 'var(--spacing-xs)' }}>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>{dish.category}</span>
-                      <h3 style={{ fontSize: '1.1rem', fontFamily: 'var(--font-body)', fontWeight: 700, color: 'var(--color-text-main)' }}>{dish.name}</h3>
-                      <p style={{ color: 'var(--color-primary)', fontWeight: 800, fontSize: '1.15rem', marginTop: 'auto' }}>
-                        {dish.price.toLocaleString('vi-VN')} đ
-                      </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: 'var(--spacing-md)', gap: 'var(--spacing-xs)' }}>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{dish.category}</span>
+                      <h3 style={{ fontSize: '1.1rem', fontFamily: 'var(--font-body)', fontWeight: 800, color: 'var(--color-text-main)', lineHeight: 1.3 }}>{dish.name}</h3>
                       
-                      <button 
-                        className="btn-primary" 
-                        style={{ width: '100%', minHeight: '40px', padding: 'var(--spacing-sm) var(--spacing-md)', marginTop: 'var(--spacing-sm)' }}
-                        onClick={() => addToCart(dish.id)}
-                      >
-                        Thêm món
-                      </button>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: 'auto', paddingTop: 'var(--spacing-sm)' }}>
+                        <p style={{ color: 'var(--color-primary)', fontWeight: 800, fontSize: '1.15rem' }}>
+                          {dish.price.toLocaleString('vi-VN')} đ
+                        </p>
+                        
+                        <button 
+                          className="btn-primary btn-active-scale" 
+                          style={{ minHeight: '36px', padding: '0 var(--spacing-md)', borderRadius: 'var(--radius-full)' }}
+                          onClick={() => addToCart(dish.id)}
+                        >
+                          + Thêm
+                        </button>
+                      </div>
                     </div>
                   </article>
-                ))}
+                  )
+                })}
               </div>
 
               {filteredMenu.length === 0 && (
@@ -554,7 +616,7 @@ export default function CustomerPortal({
       {cartItemsCount > 0 && activeTab === 'menu' && (
         <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 'var(--z-sticky)', padding: 'var(--spacing-md)', background: 'linear-gradient(to top, oklch(100% 0.001 60 / 90%) 30%, oklch(100% 0.001 60 / 0%))', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}>
           <button 
-            className="btn-primary" 
+            className="btn-primary btn-active-scale" 
             style={{ width: '100%', borderRadius: 'var(--radius-full)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--spacing-md) var(--spacing-lg)', boxShadow: 'var(--shadow-high)' }}
             onClick={() => setIsCartOpen(true)}
           >
@@ -830,5 +892,7 @@ export default function CustomerPortal({
         </div>
       )}
     </div>
+    )}
+    </>
   )
 }
