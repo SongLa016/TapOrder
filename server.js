@@ -1,136 +1,144 @@
-import express from 'express';
-import cors from 'cors';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import express from 'express'
+import cors from 'cors'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
+import mongoose from 'mongoose'
+import dotenv from 'dotenv'
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+dotenv.config()
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-const DB_PATH = path.join(__dirname, 'database.json');
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
-app.use(cors());
-app.use(express.json());
+const app = express()
+const port = process.env.PORT || 3000
 
-// Phục vụ các file tĩnh của giao diện (Frontend) sau khi build
-app.use(express.static(path.join(__dirname, 'dist')));
+app.use(cors())
+app.use(express.json({ limit: '50mb' }))
 
-// Khởi tạo State ban đầu
-let appState = {
-  restaurant: null,
-  menu: [],
-  tables: [],
-  orders: []
-};
+// Multi-tenant Memory
+const clientsMap = new Map() // { tenantId: Set<Response> }
+const stateMap = new Map() // { tenantId: Object }
 
-// Đọc dữ liệu từ ổ cứng (Persistence)
-if (fs.existsSync(DB_PATH)) {
-  try {
-    const data = fs.readFileSync(DB_PATH, 'utf-8');
-    appState = JSON.parse(data);
-    console.log('✅ Đã nạp thành công dữ liệu từ database.json');
-  } catch (error) {
-    console.error('❌ Lỗi khi đọc database.json:', error);
+// MongoDB Schema
+const TenantSchema = new mongoose.Schema({
+  tenantId: { type: String, required: true, unique: true },
+  state: { type: Object, default: {} }
+})
+const Tenant = mongoose.model('Tenant', TenantSchema)
+
+// Connect to MongoDB
+const MONGODB_URI = process.env.MONGODB_URI
+let isDbConnected = false
+
+if (MONGODB_URI) {
+  mongoose.connect(MONGODB_URI)
+    .then(() => {
+      console.log('✅ Đã kết nối thành công tới Cơ sở dữ liệu đám mây (MongoDB)')
+      isDbConnected = true
+      // Load all tenants into memory
+      return Tenant.find({})
+    })
+    .then((tenants) => {
+      tenants.forEach(t => stateMap.set(t.tenantId, t.state))
+    })
+    .catch(err => console.error('❌ Lỗi kết nối MongoDB:', err))
+} else {
+  console.log('⚠️ Chưa có đường link MongoDB. Hệ thống sẽ lưu file cục bộ (Dễ bị mất dữ liệu trên Render).')
+}
+
+// Fallback local file system for dev mode
+const getDbFilePath = (tenantId) => path.join(__dirname, `database_${tenantId}.json`)
+
+const loadState = async (tenantId) => {
+  if (stateMap.has(tenantId)) return stateMap.get(tenantId)
+  
+  if (isDbConnected) {
+    const doc = await Tenant.findOne({ tenantId })
+    const state = doc ? doc.state : {}
+    stateMap.set(tenantId, state)
+    return state
+  } else {
+    try {
+      const data = fs.readFileSync(getDbFilePath(tenantId), 'utf8')
+      const state = JSON.parse(data)
+      stateMap.set(tenantId, state)
+      return state
+    } catch (err) {
+      stateMap.set(tenantId, {})
+      return {}
+    }
   }
 }
 
-// Lưu dữ liệu vào ổ cứng
-const saveDatabase = () => {
-  try {
-    fs.writeFileSync(DB_PATH, JSON.stringify(appState, null, 2), 'utf-8');
-  } catch (error) {
-    console.error('❌ Lỗi khi ghi dữ liệu vào database.json:', error);
+const saveState = async (tenantId, state) => {
+  stateMap.set(tenantId, state)
+  if (isDbConnected) {
+    await Tenant.updateOne({ tenantId }, { state }, { upsert: true })
+  } else {
+    fs.writeFileSync(getDbFilePath(tenantId), JSON.stringify(state, null, 2))
   }
-};
+}
 
-// Danh sách thiết bị đang kết nối (Real-time SSE)
-let sseClients = [];
+// Routes
+app.get('/api/state', async (req, res) => {
+  const tenantId = req.query.r
+  if (!tenantId) return res.status(400).json({ error: 'Missing tenant ID (r)' })
+  const state = await loadState(tenantId)
+  res.json(state)
+})
 
-const broadcast = (event, data) => {
-  sseClients.forEach(client => {
-    client.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  });
-};
+app.post('/api/state', async (req, res) => {
+  const tenantId = req.query.r
+  if (!tenantId) return res.status(400).json({ error: 'Missing tenant ID (r)' })
 
-// API: Lắng nghe sự kiện Real-time (Server-Sent Events)
-app.get('/api/events', (req, res) => {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*'
-  });
-  res.write('\n');
-  sseClients.push(res);
+  await saveState(tenantId, req.body)
+
+  const clients = clientsMap.get(tenantId) || new Set()
+  clients.forEach(client => {
+    client.write(`data: ${JSON.stringify(req.body)}\n\n`)
+  })
+
+  res.json({ success: true })
+})
+
+app.get('/api/events', async (req, res) => {
+  const tenantId = req.query.r
+  if (!tenantId) {
+    res.status(400).end()
+    return
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders()
+
+  if (!clientsMap.has(tenantId)) {
+    clientsMap.set(tenantId, new Set())
+  }
+  const clients = clientsMap.get(tenantId)
+  clients.add(res)
+
+  // Gửi state hiện tại ngay lập tức
+  const state = await loadState(tenantId)
+  res.write(`data: ${JSON.stringify(state)}\n\n`)
 
   req.on('close', () => {
-    sseClients = sseClients.filter(c => c !== res);
-  });
-});
-
-// API: Lấy trạng thái hiện tại
-app.get('/api/state', (req, res) => {
-  res.json(appState);
-});
-
-// API: Cập nhật trạng thái và đồng bộ cho tất cả thiết bị
-app.post('/api/state', (req, res) => {
-  const updates = req.body;
-
-  if (updates.restaurant !== undefined) appState.restaurant = updates.restaurant;
-  if (updates.menu !== undefined) appState.menu = updates.menu;
-
-  if (updates.tables !== undefined) {
-    if (updates.modifiedTableNumbers !== undefined && Array.isArray(updates.modifiedTableNumbers)) {
-      appState.tables = appState.tables.map(t => {
-        if (updates.modifiedTableNumbers.includes(t.number)) {
-          const incoming = updates.tables.find(it => it.number === t.number);
-          return incoming ? { ...t, ...incoming } : t;
-        }
-        return t;
-      });
-      updates.tables.forEach(it => {
-        if (!appState.tables.some(t => t.number === it.number)) {
-          appState.tables.push(it);
-        }
-      });
-    } else {
-      appState.tables = updates.tables;
+    clients.delete(res)
+    if (clients.size === 0) {
+      clientsMap.delete(tenantId)
     }
-  }
+  })
+})
 
-  if (updates.orders !== undefined) {
-    const serverOrderMap = new Map(appState.orders.map(o => [o.id, o]));
-    updates.orders.forEach(newOrder => {
-      const existing = serverOrderMap.get(newOrder.id);
-      if (!existing) {
-        appState.orders.push(newOrder);
-      } else {
-        Object.assign(existing, newOrder);
-      }
-    });
-    appState.orders.sort((a, b) => b.timestamp - a.timestamp);
-  }
+app.use(express.static(path.join(__dirname, 'dist')))
 
-  // Phát tín hiệu đồng bộ cho mọi điện thoại/máy tính
-  broadcast('state-updated', {
-    state: appState,
-    actionContext: updates.actionContext
-  });
-
-  // Ghi xuống file JSON
-  saveDatabase();
-
-  res.json({ success: true });
-});
-
-// Chuyển hướng mọi URL khác về file index.html của React (Hỗ trợ Routing)
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
-});
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'))
+})
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Máy chủ Quản lý Quán đã chạy tại http://localhost:${PORT}`);
-});
+app.listen(port, () => {
+  console.log(`🚀 Máy chủ Đa Nhánh (SaaS) đã chạy tại http://localhost:${port}`)
+})

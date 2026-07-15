@@ -120,170 +120,162 @@ export default function App() {
     }
   }
 
-  // Global States loaded from LocalStorage or seed data
+  // Lấy Mã Quán (Tenant ID) từ đường dẫn URL
+  const urlParams = new URLSearchParams(window.location.search)
+  const tenantId = urlParams.get('r')
+
+  // Global States
   const [restaurant, setRestaurant] = useState<RestaurantInfo>(() => {
-    const data = localStorage.getItem('qr_restaurant')
+    const data = localStorage.getItem(`qr_restaurant_${tenantId}`)
     return data ? JSON.parse(data) : DEFAULT_RESTAURANT
   })
 
   const [menu, setMenu] = useState<MenuItem[]>(() => {
-    const data = localStorage.getItem('qr_menu')
+    const data = localStorage.getItem(`qr_menu_${tenantId}`)
     return data ? JSON.parse(data) : DEFAULT_MENU
   })
 
   const [tables, setTables] = useState<Table[]>(() => {
-    const data = localStorage.getItem('qr_tables')
+    const data = localStorage.getItem(`qr_tables_${tenantId}`)
     return data ? JSON.parse(data) : DEFAULT_TABLES
   })
 
   const [orders, setOrders] = useState<Order[]>(() => {
-    const data = localStorage.getItem('qr_orders')
+    const data = localStorage.getItem(`qr_orders_${tenantId}`)
     return data ? JSON.parse(data) : DEFAULT_ORDERS
   })
 
-
-  // Load state from local storage as quick default fallback
+  // Synchronize state across devices
   useEffect(() => {
-    const isGitHubPages = window.location.hostname.includes('github.io')
-    if (isGitHubPages) {
-      console.log('QROrder: Running on GitHub Pages static demo (Offline LocalStorage mode active).')
-      return
-    }
+    if (!tenantId) return 
 
-    let eventSource: EventSource | null = null
-
-    // 1. Fetch initial synchronized state from backend API
-    fetch('/api/state')
+    // Tải state hiện tại từ Backend cho riêng Quán này
+    fetch(`/api/state?r=${tenantId}`)
       .then(res => res.json())
       .then(data => {
-        if (data.menu && data.menu.length > 0) {
-          if (data.restaurant) {
-            setRestaurant(data.restaurant)
-            localStorage.setItem('qr_restaurant', JSON.stringify(data.restaurant))
-          }
-          if (data.menu) {
-            setMenu(data.menu)
-            localStorage.setItem('qr_menu', JSON.stringify(data.menu))
-          }
-          if (data.tables) {
-            setTables(data.tables)
-            localStorage.setItem('qr_tables', JSON.stringify(data.tables))
-          }
-          if (data.orders) {
-            setOrders(data.orders)
-            localStorage.setItem('qr_orders', JSON.stringify(data.orders))
-          }
-        } else {
-          // Backend is empty (fresh server start), seed the default state to the server!
-          updateGlobalState({
-            restaurant,
-            menu,
-            tables,
-            orders
-          }, 'SEED')
+        if (data && data.restaurant) {
+          setRestaurant(data.restaurant)
+          setMenu(data.menu || [])
+          setTables(data.tables || [])
+          setOrders(data.orders || [])
         }
-
-        // 2. Set up SSE connection ONLY if backend is active
-        eventSource = new EventSource('/api/events')
-        
-        eventSource.addEventListener('state-updated', (event: any) => {
-          try {
-            const { state, actionContext } = JSON.parse(event.data)
-            const isAdminMode = new URLSearchParams(window.location.search).get('role') === 'admin'
-            
-            // Play distinct chimes on the manager dashboard
-            if (isAdminMode) {
-              if (actionContext === 'CALL_STAFF') {
-                playWaiterCallPing()
-              } else if (actionContext === 'REQUEST_BILL') {
-                playBillRequestPing()
-              }
-            }
-
-            if (state.restaurant) {
-              setRestaurant(state.restaurant)
-              localStorage.setItem('qr_restaurant', JSON.stringify(state.restaurant))
-            }
-            if (state.menu) {
-              setMenu(state.menu)
-              localStorage.setItem('qr_menu', JSON.stringify(state.menu))
-            }
-            if (state.tables) {
-              setTables(state.tables)
-              localStorage.setItem('qr_tables', JSON.stringify(state.tables))
-            }
-            if (state.orders) {
-              setOrders((currentOrders) => {
-                // Trigger audio ping alert on dashboard if a customer placed a new order
-                if (actionContext === 'NEW_ORDER' && state.orders.length > currentOrders.length && isAdminMode) {
-                  playOrderPing()
-                }
-                return state.orders
-              })
-              localStorage.setItem('qr_orders', JSON.stringify(state.orders))
-            }
-          } catch (err) {
-            console.error('Error parsing SSE sync payload:', err)
-          }
-        })
       })
       .catch(() => {
         console.warn('QROrder: Realtime sync server not detected. Operating in LocalStorage-only mode.')
       })
 
-    return () => {
-      if (eventSource) {
-        eventSource.close()
+    // Lắng nghe thay đổi real-time của riêng Quán này
+    const eventSource = new EventSource(`/api/events?r=${tenantId}`)
+    eventSource.onmessage = (event) => {
+      try {
+        const { state, actionContext } = JSON.parse(event.data)
+        const isAdminMode = new URLSearchParams(window.location.search).get('role') === 'admin'
+        
+        if (isAdminMode) {
+          if (actionContext === 'CALL_STAFF') playWaiterCallPing()
+          else if (actionContext === 'REQUEST_BILL') playBillRequestPing()
+        }
+
+        if (state) {
+          if (state.restaurant) setRestaurant(state.restaurant)
+          if (state.menu) setMenu(state.menu)
+          if (state.tables) setTables(state.tables)
+          if (state.orders) {
+             if (actionContext === 'NEW_ORDER' && isAdminMode) playOrderPing()
+             setOrders(state.orders)
+          }
+        }
+      } catch (e) {
+        console.error('Error parsing SSE data', e)
       }
     }
-  }, [])
 
-  // Helper to mutate state, update localStorage, and broadcast to all devices via Vite API
+    return () => {
+      eventSource.close()
+    }
+  }, [tenantId])
+
+  // Update LocalStorage whenever states change
+  useEffect(() => {
+    if (!tenantId) return
+    localStorage.setItem(`qr_restaurant_${tenantId}`, JSON.stringify(restaurant))
+  }, [restaurant, tenantId])
+  useEffect(() => {
+    if (!tenantId) return
+    localStorage.setItem(`qr_menu_${tenantId}`, JSON.stringify(menu))
+  }, [menu, tenantId])
+  useEffect(() => {
+    if (!tenantId) return
+    localStorage.setItem(`qr_tables_${tenantId}`, JSON.stringify(tables))
+  }, [tables, tenantId])
+  useEffect(() => {
+    if (!tenantId) return
+    localStorage.setItem(`qr_orders_${tenantId}`, JSON.stringify(orders))
+  }, [orders, tenantId])
+
+  // SAAS LANDING PAGE
+  if (!tenantId) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--color-surface)' }}>
+        <div className="card" style={{ maxWidth: '400px', width: '90%', textAlign: 'center', padding: 'var(--spacing-xl)' }}>
+          <div style={{ fontSize: '3rem', marginBottom: 'var(--spacing-md)' }}>🍽️</div>
+          <h1 style={{ fontFamily: 'var(--font-display)', marginBottom: 'var(--spacing-xs)' }}>TapOrder SaaS</h1>
+          <p style={{ color: 'var(--color-text-muted)', marginBottom: 'var(--spacing-lg)' }}>Nền tảng Quản lý gọi món bằng mã QR.</p>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+            <div>
+              <p style={{ fontSize: '0.9rem', fontWeight: 600, marginBottom: '8px', textAlign: 'left' }}>Nhập Mã Quán của bạn:</p>
+              <form onSubmit={(e) => {
+                e.preventDefault()
+                const val = (e.target as any).tenantInput.value.trim()
+                if (val) window.location.href = `/?r=${val}`
+              }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input type="text" name="tenantInput" className="form-control" placeholder="Ví dụ: quan-pho-a" style={{ flex: 1 }} required />
+                  <button type="submit" className="btn-primary" style={{ padding: '0 var(--spacing-md)' }}>Vào</button>
+                </div>
+              </form>
+            </div>
+            
+            <div style={{ position: 'relative', margin: 'var(--spacing-md) 0' }}>
+              <div style={{ position: 'absolute', top: '50%', left: 0, right: 0, borderTop: '1px solid var(--color-border)', zIndex: 0 }}></div>
+              <span style={{ position: 'relative', background: 'var(--color-surface)', padding: '0 12px', color: 'var(--color-text-muted)', fontSize: '0.85rem', zIndex: 1 }}>Hoặc</span>
+            </div>
+
+            <button 
+              className="btn-outline" 
+              onClick={() => {
+                const randomId = 'quan-' + Math.random().toString(36).substring(2, 8)
+                window.location.href = `/?r=${randomId}`
+              }}
+            >
+              ✨ Tạo Không gian Quán Mới
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Helper to mutate state
   const updateGlobalState = (
-    updater: {
-      restaurant?: RestaurantInfo
-      menu?: MenuItem[]
-      tables?: Table[]
-      orders?: Order[]
-    },
+    updater: { restaurant?: RestaurantInfo, menu?: MenuItem[], tables?: Table[], orders?: Order[] },
     actionContext?: string
   ) => {
     let modifiedTableNumbers: number[] = []
-
     if (updater.tables) {
-      // Find tables that actually changed
-      tables.forEach((t, i) => {
+       tables.forEach((t, i) => {
         const newT = updater.tables![i]
-        if (newT && (newT.status !== t.status || newT.activeCall !== t.activeCall || newT.sessionId !== t.sessionId || newT.label !== t.label)) {
-          modifiedTableNumbers.push(newT.number)
-        }
+        if (newT && (newT.status !== t.status || newT.activeCall !== t.activeCall)) modifiedTableNumbers.push(newT.number)
       })
-      // If table list structure changed (add/delete), mark all as modified
-      if (updater.tables.length !== tables.length) {
-        modifiedTableNumbers = updater.tables.map(t => t.number)
-      }
     }
 
-    // Update local React states and browser caches
-    if (updater.restaurant) {
-      localStorage.setItem('qr_restaurant', JSON.stringify(updater.restaurant))
-      setRestaurant(updater.restaurant)
-    }
-    if (updater.menu) {
-      localStorage.setItem('qr_menu', JSON.stringify(updater.menu))
-      setMenu(updater.menu)
-    }
-    if (updater.tables) {
-      localStorage.setItem('qr_tables', JSON.stringify(updater.tables))
-      setTables(updater.tables)
-    }
-    if (updater.orders) {
-      localStorage.setItem('qr_orders', JSON.stringify(updater.orders))
-      setOrders(updater.orders)
-    }
+    if (updater.restaurant) setRestaurant(updater.restaurant)
+    if (updater.menu) setMenu(updater.menu)
+    if (updater.tables) setTables(updater.tables)
+    if (updater.orders) setOrders(updater.orders)
 
-    // Publish update to Vite backend API
-    fetch('/api/state', {
+    fetch(`/api/state?r=${tenantId}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

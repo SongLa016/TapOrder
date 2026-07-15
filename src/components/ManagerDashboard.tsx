@@ -554,12 +554,15 @@ export default function ManagerDashboard({
         <div className="print-page" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 'var(--spacing-lg)' }}>
           {selectedPrintTables.map((num: number) => {
             const tableUrl = `${window.location.origin}${window.location.pathname}?table=${num}`
+            const tenantId = new URLSearchParams(window.location.search).get('r')
+            const qrUrl = `${window.location.origin}${window.location.pathname}?r=${tenantId}#/table/${num}`
+            const absoluteQrUrl = qrUrl.startsWith('http') ? qrUrl : `https://${window.location.host}${qrUrl}`
             return (
               <div
                 key={num}
                 className="qr-card-print card"
                 style={{ alignItems: 'center', textAlign: 'center', padding: 'var(--spacing-xl)', gap: 'var(--spacing-md)', cursor: 'pointer' }}
-                onClick={() => window.open(tableUrl, '_blank')}
+                onClick={() => window.open(absoluteQrUrl, '_blank')}
                 title="Click để mở nhanh tab gọi món"
               >
                 <span style={{ fontSize: '2.5rem', display: 'block' }}>
@@ -578,7 +581,7 @@ export default function ManagerDashboard({
 
                 {/* Dynamically render QR Code */}
                 <div style={{ width: '180px', height: '180px', margin: 'var(--spacing-md) 0' }}>
-                  <QRCodeSVG text={tableUrl} size={180} />
+                  <QRCodeSVG text={absoluteQrUrl} size={180} />
                 </div>
 
                 <div style={{ border: '2px solid var(--color-primary)', padding: 'var(--spacing-sm) var(--spacing-md)', borderRadius: 'var(--radius-sm)', backgroundColor: 'var(--color-primary-light)', color: 'var(--color-primary)', fontWeight: 800, fontSize: '1.5rem', width: '100%' }}>
