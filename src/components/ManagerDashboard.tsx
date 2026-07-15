@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
-import { MenuItem, Order, Table, RestaurantInfo } from '../types.ts'
+import { MenuItem, Order, Table, RestaurantInfo, OrderItem } from '../types.ts'
 import { QRCodeSVG } from '../utils/qrGenerator.ts'
-import { playOrderPing } from '../utils/soundHelper.ts'
+import { playOrderPing, playWaiterCallPing, playBillRequestPing } from '../utils/soundHelper.ts'
 import {
   ShoppingBag,
   UtensilsCrossed,
@@ -70,6 +70,7 @@ export default function ManagerDashboard({
 
   // Receipt Printing State
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null)
+  const [tableReceiptToPrint, setTableReceiptToPrint] = useState<Table | null>(null)
 
   const [timeFilter, setTimeFilter] = useState<'day' | 'week' | 'month' | 'custom'>('day')
   // Custom date range (ISO date strings, e.g. '2026-07-01')
@@ -100,9 +101,22 @@ export default function ManagerDashboard({
   // Notification Toast State
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const prevOrdersRef = React.useRef(orders)
+  const prevTablesRef = React.useRef(tables)
 
-  // Listen for orders that just reported QR payment
+  // Listen for orders that just reported QR payment & new orders/calls for audio notification
   React.useEffect(() => {
+    let shouldPlayOrderPing = false;
+    let shouldPlayCallPing = false;
+    let shouldPlayBillPing = false;
+
+    // Check for new orders
+    if (orders.length > prevOrdersRef.current.length) {
+      const newOrders = orders.filter(o => !prevOrdersRef.current.find(po => po.id === o.id));
+      if (newOrders.some(o => o.status === 'pending')) {
+        shouldPlayOrderPing = true;
+      }
+    }
+
     orders.forEach(order => {
       if (order.paymentMethod === 'mobile' && order.paymentReported) {
         const prevOrder = prevOrdersRef.current.find(po => po.id === order.id)
@@ -117,11 +131,31 @@ export default function ManagerDashboard({
           const titleText = order.customerName ? `${order.customerName} (${tableDisp})` : tableDisp
           
           setToastMessage(`🔔 ${titleText} báo cáo ĐÃ CHUYỂN KHOẢN cho đơn hàng (${dishNames}). Quản lý vui lòng kiểm tra App Ngân hàng để đối chiếu!`)
+          shouldPlayOrderPing = true;
         }
       }
     })
     prevOrdersRef.current = orders
-  }, [orders, menu, tables])
+
+    // Check for new table calls
+    tables.forEach(table => {
+      const prevTable = prevTablesRef.current.find(t => t.number === table.number)
+      if (table.activeCall && (!prevTable || prevTable.activeCall !== table.activeCall)) {
+        if (table.activeCall === 'request_bill') {
+          shouldPlayBillPing = true;
+        } else {
+          shouldPlayCallPing = true;
+        }
+      }
+    })
+    prevTablesRef.current = tables
+
+    if (!isAudioSuspended) {
+      if (shouldPlayOrderPing) playOrderPing();
+      else if (shouldPlayBillPing) playBillRequestPing();
+      else if (shouldPlayCallPing) playWaiterCallPing();
+    }
+  }, [orders, tables, menu, isAudioSuspended])
 
   React.useEffect(() => {
     if (toastMessage) {
@@ -539,16 +573,103 @@ export default function ManagerDashboard({
 
   // Print receipt side effect
   React.useEffect(() => {
-    if (receiptOrder) {
+    if (receiptOrder || tableReceiptToPrint) {
       const timer1 = setTimeout(() => {
         window.print();
         setTimeout(() => {
           setReceiptOrder(null);
+          setTableReceiptToPrint(null);
         }, 500);
       }, 300);
       return () => clearTimeout(timer1);
     }
-  }, [receiptOrder]);
+  }, [receiptOrder, tableReceiptToPrint]);
+
+  // Render Consolidated Table Receipt directly
+  if (tableReceiptToPrint) {
+    const tableDisp = getTableName(tableReceiptToPrint);
+    
+    // Gom nhóm các đơn hàng của bàn trong phiên này
+    const sessionOrders = orders.filter(o => 
+      o.tableNumber === tableReceiptToPrint.number && 
+      (o.sessionId === tableReceiptToPrint.sessionId || (!tableReceiptToPrint.sessionId && o.status !== 'completed'))
+    );
+    
+    const consolidated = new Map<string, { item: OrderItem, quantity: number, price: number, name: string }>();
+    let grandTotal = 0;
+    
+    sessionOrders.forEach(o => {
+      grandTotal += o.total;
+      o.items.forEach(item => {
+        const key = item.menuItemId + (item.notes ? `-${item.notes}` : '');
+        if (consolidated.has(key)) {
+          const existing = consolidated.get(key)!;
+          existing.quantity += item.quantity;
+        } else {
+          const dish = menu.find(d => d.id === item.menuItemId);
+          const name = item.snapshotName || dish?.name || 'Món ăn';
+          const price = item.snapshotPrice ?? dish?.price ?? 0;
+          consolidated.set(key, { item, quantity: item.quantity, price, name });
+        }
+      });
+    });
+
+    const consolidatedItems = Array.from(consolidated.values());
+    const customerNames = Array.from(new Set(sessionOrders.map(o => o.customerName).filter(Boolean))).join(', ');
+
+    return (
+      <div style={{ padding: '20px', fontFamily: 'monospace', maxWidth: '300px', margin: '0 auto', color: 'black', backgroundColor: 'white' }}>
+        <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+          <h2 style={{ margin: '0 0 5px 0', fontSize: '1.5rem' }}>{restaurant.name}</h2>
+          {restaurant.address && <p style={{ margin: 0, fontSize: '0.85rem' }}>{restaurant.address}</p>}
+          <p style={{ margin: '5px 0', fontSize: '0.85rem' }}>{restaurant.tagline}</p>
+          <div style={{ borderBottom: '1px dashed black', margin: '10px 0' }}></div>
+          <h3 style={{ margin: '5px 0' }}>TỔNG HÓA ĐƠN BÀN</h3>
+          <p style={{ margin: 0, fontSize: '0.85rem' }}>Giờ in: {new Date().toLocaleString('vi-VN')}</p>
+        </div>
+
+        <div style={{ marginBottom: '10px' }}>
+          <p style={{ margin: '2px 0', fontSize: '1.2rem' }}><strong>{tableDisp}</strong></p>
+          {customerNames && <p style={{ margin: '2px 0' }}>Khách hàng: {customerNames}</p>}
+        </div>
+
+        <div style={{ borderBottom: '1px dashed black', margin: '10px 0' }}></div>
+
+        <table style={{ width: '100%', fontSize: '0.85rem', textAlign: 'left', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={{ paddingBottom: '5px' }}>Món</th>
+              <th style={{ paddingBottom: '5px', textAlign: 'center' }}>SL</th>
+              <th style={{ paddingBottom: '5px', textAlign: 'right' }}>Thành tiền</th>
+            </tr>
+          </thead>
+          <tbody>
+            {consolidatedItems.map((ci, idx) => (
+              <tr key={idx}>
+                <td style={{ padding: '4px 0', borderBottom: '1px dotted #ccc' }}>{ci.name}</td>
+                <td style={{ padding: '4px 0', borderBottom: '1px dotted #ccc', textAlign: 'center' }}>{ci.quantity}</td>
+                <td style={{ padding: '4px 0', borderBottom: '1px dotted #ccc', textAlign: 'right' }}>{(ci.price * ci.quantity).toLocaleString('vi-VN')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div style={{ borderBottom: '1px dashed black', margin: '10px 0' }}></div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '1.1rem', margin: '10px 0' }}>
+          <span>TỔNG CỘNG:</span>
+          <span>{grandTotal.toLocaleString('vi-VN')} đ</span>
+        </div>
+
+        <div style={{ borderBottom: '1px dashed black', margin: '10px 0' }}></div>
+
+        <div style={{ textAlign: 'center', fontSize: '0.85rem', marginTop: '20px' }}>
+          <p style={{ margin: '2px 0' }}>Cảm ơn quý khách!</p>
+          <p style={{ margin: '2px 0' }}>Hẹn gặp lại</p>
+        </div>
+      </div>
+    );
+  }
 
   // Render receipt directly
   if (receiptOrder) {
@@ -1006,26 +1127,37 @@ export default function ManagerDashboard({
                   return (
                     <div
                       key={t.number}
-                      onClick={() => window.open(tableUrl, '_blank')}
                       style={{
                         backgroundColor: bgColor,
                         border: `2px solid ${borderColor}`,
                         borderRadius: 'var(--radius-sm)',
                         padding: 'var(--spacing-sm)',
                         textAlign: 'center',
-                        cursor: 'pointer',
                         display: 'flex',
                         flexDirection: 'column',
                         justifyContent: 'center',
                         alignItems: 'center',
                         aspectRatio: '1',
                         transition: 'var(--transition-fast)',
-                        boxShadow: 'var(--shadow-low)'
+                        boxShadow: 'var(--shadow-low)',
+                        position: 'relative',
+                        paddingBottom: t.status !== 'empty' ? '32px' : 'var(--spacing-sm)'
                       }}
-                      title={`Mở tab khách: ${getTableName(t)}`}
                     >
-                      <strong style={{ fontSize: '0.9rem', color: textColor, lineHeight: 1.2 }}>{getTableName(t)}</strong>
-                      <span style={{ fontSize: '0.65rem', marginTop: '4px', fontWeight: 600, color: textColor }}>{statusText}</span>
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', cursor: 'pointer', width: '100%' }} onClick={() => window.open(tableUrl, '_blank')} title={`Mở tab khách: ${getTableName(t)}`}>
+                        <strong style={{ fontSize: '0.9rem', color: textColor, lineHeight: 1.2 }}>{getTableName(t)}</strong>
+                        <span style={{ fontSize: '0.65rem', marginTop: '4px', fontWeight: 600, color: textColor }}>{statusText}</span>
+                      </div>
+                      
+                      {t.status !== 'empty' && (
+                        <button 
+                          className="btn-secondary" 
+                          style={{ position: 'absolute', bottom: '6px', left: '6px', right: '6px', fontSize: '0.7rem', padding: '2px', minHeight: '22px', backgroundColor: 'var(--color-bg-surface)' }}
+                          onClick={(e) => { e.stopPropagation(); setTableReceiptToPrint(t); }}
+                        >
+                          🖨️ Tổng Bill
+                        </button>
+                      )}
                     </div>
                   );
                 })}
