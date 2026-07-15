@@ -10,7 +10,9 @@ export interface MenuItem {
 export interface OrderItem {
   menuItemId: string
   quantity: number
-  notes: string
+  notes?: string
+  snapshotName?: string
+  snapshotPrice?: number
 }
 
 export interface Order {
@@ -25,6 +27,8 @@ export interface Order {
   rating?: number
   comment?: string
   customerName?: string
+  paymentVerified?: boolean
+  paymentReported?: boolean
 }
 
 
@@ -33,7 +37,7 @@ export interface Table {
   number: number
   label?: string            // Custom display name e.g. "Bàn 1 Tầng 2", "VIP 01"
   status: 'empty' | 'ordering' | 'served' | 'billing'
-  activeCall?: 'call_waiter' | 'request_bill'
+  activeCall?: 'call_waiter' | 'request_bill' | null
   sessionId?: string   // Rotates each time a new guest party sits down
 }
 
@@ -44,5 +48,6 @@ export interface RestaurantInfo {
   tagline: string
   logo: string
   address?: string
+  paymentQrCode?: string
   onboarded?: boolean
 }

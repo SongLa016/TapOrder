@@ -140,6 +140,11 @@ button, input, select, textarea {
   transition: var(--transition-fast);
 }
 
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
 button {
   cursor: pointer;
   border: none;
@@ -502,7 +507,13 @@ input:checked + .toggle-slider::before {
 /* Pulse animation for pending order indicators */
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50%       { opacity: 0.5; transform: scale(1.25); }
+  50%       { opacity: 0.6; transform: scale(1.15); }
+}
+
+@keyframes popIn {
+  0% { transform: scale(0.8); opacity: 0; }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {

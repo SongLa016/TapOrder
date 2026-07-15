@@ -225,6 +225,22 @@ export default function App() {
     },
     actionContext?: string
   ) => {
+    let modifiedTableNumbers: number[] = []
+
+    if (updater.tables) {
+      // Find tables that actually changed
+      tables.forEach((t, i) => {
+        const newT = updater.tables![i]
+        if (newT && (newT.status !== t.status || newT.activeCall !== t.activeCall || newT.sessionId !== t.sessionId || newT.label !== t.label)) {
+          modifiedTableNumbers.push(newT.number)
+        }
+      })
+      // If table list structure changed (add/delete), mark all as modified
+      if (updater.tables.length !== tables.length) {
+        modifiedTableNumbers = updater.tables.map(t => t.number)
+      }
+    }
+
     // Update local React states and browser caches
     if (updater.restaurant) {
       localStorage.setItem('qr_restaurant', JSON.stringify(updater.restaurant))
@@ -249,7 +265,7 @@ export default function App() {
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ ...updater, actionContext })
+      body: JSON.stringify({ ...updater, modifiedTableNumbers, actionContext })
     }).catch(err => console.error('Error broadcasting update to server:', err))
   }
 
@@ -289,6 +305,23 @@ export default function App() {
 
   if (tableParam) {
     const tableNumber = parseInt(tableParam, 10)
+    const tableExists = tables.some(t => t.number === tableNumber)
+
+    if (isNaN(tableNumber) || !tableExists) {
+      return (
+        <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 'var(--spacing-md)', padding: 'var(--spacing-md)', textAlign: 'center' }}>
+          <span style={{ fontSize: '4rem' }}>⚠️</span>
+          <h2 style={{ fontFamily: 'var(--font-display)', fontWeight: 800 }}>Bàn không tồn tại</h2>
+          <p style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem', maxWidth: '400px' }}>
+            Mã quét QR hoặc số bàn trên đường dẫn không hợp lệ. Vui lòng quét lại mã QR tại bàn của bạn hoặc quay về trang chủ.
+          </p>
+          <button className="btn-primary" style={{ minHeight: '44px' }} onClick={() => navigateTo('')}>
+            Quay về Trang Chủ
+          </button>
+        </div>
+      )
+    }
+
     return (
       <CustomerPortal
         tableNumber={tableNumber}

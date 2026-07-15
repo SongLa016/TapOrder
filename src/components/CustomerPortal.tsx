@@ -54,6 +54,9 @@ export default function CustomerPortal({
   const [ratingScore, setRatingScore] = useState(5)
   const [commentText, setCommentText] = useState('')
   const [showSuccessModal, setShowSuccessModal] = useState(false)
+  const [showQrPaymentModal, setShowQrPaymentModal] = useState(false)
+  const [qrPaymentTotal, setQrPaymentTotal] = useState(0)
+  const [qrPaymentOrderId, setQrPaymentOrderId] = useState<string | null>(null)
 
   // Toast notification state
   const [toastMessage, setToastMessage] = useState<string | null>(null)
@@ -62,6 +65,52 @@ export default function CustomerPortal({
   const [customerName, setCustomerName] = useState<string>(() => {
     return localStorage.getItem(`customer_name_table_${tableNumber}`) || ''
   })
+
+  // Local storage guest session ID
+  const sessionKey = `qr_active_session_table_${tableNumber}`
+  const [localSessionId, setLocalSessionId] = useState<string>(() => {
+    return localStorage.getItem(sessionKey) || ''
+  })
+  const [showTakeoverModal, setShowTakeoverModal] = useState(false)
+
+  const currentTableStatus = tables.find(t => t.number === tableNumber)
+  const serverSessionId = currentTableStatus?.sessionId
+
+  // Check if session needs takeover confirmation
+  React.useEffect(() => {
+    if (serverSessionId && serverSessionId !== localSessionId && currentTableStatus?.status !== 'empty') {
+      setShowTakeoverModal(true)
+    } else if (serverSessionId && !localSessionId) {
+      // Automatically pair client with server session if table has a session
+      localStorage.setItem(sessionKey, serverSessionId)
+      setLocalSessionId(serverSessionId)
+    }
+  }, [serverSessionId, localSessionId, currentTableStatus])
+
+  const handleStartNewSession = () => {
+    const newSessionId = `session-${tableNumber}-${Date.now()}`
+    localStorage.setItem(sessionKey, newSessionId)
+    setLocalSessionId(newSessionId)
+    setCart({})
+    
+    // Reset table status to empty/fresh ordering state on server
+    const updatedTables = tables.map(t => {
+      if (t.number === tableNumber) {
+        return { ...t, status: 'empty' as const, activeCall: undefined, sessionId: newSessionId }
+      }
+      return t
+    })
+    updateGlobalState({ tables: updatedTables }, 'SESSION_RESET')
+    setShowTakeoverModal(false)
+  }
+
+  const handleJoinExistingSession = () => {
+    if (serverSessionId) {
+      localStorage.setItem(sessionKey, serverSessionId)
+      setLocalSessionId(serverSessionId)
+    }
+    setShowTakeoverModal(false)
+  }
 
   const handleCustomerNameChange = (val: string) => {
     setCustomerName(val)
@@ -85,6 +134,11 @@ export default function CustomerPortal({
 
   // Cart operations
   const addToCart = (itemId: string) => {
+    const dish = menu.find(d => d.id === itemId)
+    if (!dish || !dish.available) {
+      showToast('Món ăn hiện tại không khả dụng.')
+      return
+    }
     setCart((prev: typeof cart) => {
       const current = prev[itemId] || { quantity: 0, notes: '' }
       return {
@@ -92,7 +146,6 @@ export default function CustomerPortal({
         [itemId]: { ...current, quantity: current.quantity + 1 }
       }
     })
-    showToast('Đã thêm món vào giỏ hàng')
   }
 
   const updateCartQuantity = (itemId: string, delta: number) => {
@@ -115,7 +168,7 @@ export default function CustomerPortal({
   
   const cartTotal = Object.entries(cart).reduce((sum, [itemId, cartInfo]) => {
     const dish = menu.find(d => d.id === itemId)
-    return sum + (dish ? dish.price * cartInfo.quantity : 0)
+    return sum + (dish && dish.available ? dish.price * cartInfo.quantity : 0)
   }, 0)
 
   // Trigger calls to staff
@@ -145,21 +198,38 @@ export default function CustomerPortal({
   const handlePlaceOrder = () => {
     if (cartItemsCount === 0) return
 
-    // Get the current session ID from the table (if any)
-    const tableRecord = tables.find(t => t.number === tableNumber)
-    const currentSessionId = tableRecord?.sessionId || `session-${tableNumber}-${Date.now()}`
+    const currentSessionId = localSessionId || `session-${tableNumber}-${Date.now()}`
+    if (!localSessionId) {
+      localStorage.setItem(sessionKey, currentSessionId)
+      setLocalSessionId(currentSessionId)
+    }
 
-    const orderItems: OrderItem[] = Object.entries(cart).map(([itemId, cartInfo]) => ({
-      menuItemId: itemId,
-      quantity: cartInfo.quantity,
-      notes: cartInfo.notes || notes
-    }))
+    // Sanitize order items - only allow active and available menu items
+    const orderItems: OrderItem[] = Object.entries(cart)
+      .filter(([itemId]) => menu.some(d => d.id === itemId && d.available))
+      .map(([itemId, cartInfo]) => {
+        const dishInfo = menu.find(d => d.id === itemId)
+        return {
+          menuItemId: itemId,
+          quantity: cartInfo.quantity,
+          notes: cartInfo.notes || notes,
+          snapshotName: dishInfo?.name || 'Món đã xóa',
+          snapshotPrice: dishInfo?.price || 0
+        }
+      })
+
+    if (orderItems.length === 0) return
+
+    const currentOrderTotal = Object.entries(cart).reduce((sum, [itemId, cartInfo]) => {
+      const dish = menu.find(d => d.id === itemId)
+      return sum + (dish && dish.available ? dish.price * cartInfo.quantity : 0)
+    }, 0)
 
     const newOrder: Order = {
       id: `order-${Date.now()}`,
       tableNumber,
       items: orderItems,
-      total: cartTotal,
+      total: currentOrderTotal,
       status: 'pending',
       paymentMethod,
       timestamp: Date.now(),
@@ -183,7 +253,14 @@ export default function CustomerPortal({
     setNotes('')
     setIsCartOpen(false)
     setActiveTab('status')
-    setShowSuccessModal(true)
+    
+    if (paymentMethod === 'mobile' && restaurant.paymentQrCode) {
+      setQrPaymentOrderId(newOrder.id)
+      setQrPaymentTotal(currentOrderTotal)
+      setShowQrPaymentModal(true)
+    } else {
+      setShowSuccessModal(true)
+    }
   }
 
   // Submit Customer rating
@@ -207,15 +284,11 @@ export default function CustomerPortal({
   // Get active table calls & orders
   // Only show orders belonging to the CURRENT guest session to prevent
   // new customers from seeing or rating orders from a previous party.
-  const currentTableStatus = tables.find(t => t.number === tableNumber)
-  const currentSessionId = currentTableStatus?.sessionId
   const currentTableOrders = orders.filter(o => {
     if (o.tableNumber !== tableNumber) return false
     // If the table has a sessionId, only show orders with a matching sessionId.
-    // Orders without sessionId (legacy data) are hidden once the table has a session.
-    if (currentSessionId) return o.sessionId === currentSessionId
-    // Fallback for tables that haven't had a session ID assigned yet:
-    // show only non-completed orders so at least the current visit is visible.
+    if (localSessionId) return o.sessionId === localSessionId
+    // Fallback for tables that haven't had a session ID assigned yet
     return o.status !== 'completed'
   })
 
@@ -479,17 +552,19 @@ export default function CustomerPortal({
 
       {/* Floating Bottom Cart Bar */}
       {cartItemsCount > 0 && activeTab === 'menu' && (
-        <div style={{ position: 'fixed', bottom: 'var(--spacing-md)', left: 'var(--spacing-md)', right: 'var(--spacing-md)', zIndex: 'var(--z-sticky)' }}>
+        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 'var(--z-sticky)', padding: 'var(--spacing-md)', background: 'linear-gradient(to top, oklch(100% 0.001 60 / 90%) 30%, oklch(100% 0.001 60 / 0%))', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}>
           <button 
             className="btn-primary" 
-            style={{ width: '100%', borderRadius: 'var(--radius-full)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--spacing-md) var(--spacing-lg)' }}
+            style={{ width: '100%', borderRadius: 'var(--radius-full)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: 'var(--spacing-md) var(--spacing-lg)', boxShadow: 'var(--shadow-high)' }}
             onClick={() => setIsCartOpen(true)}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
               <ShoppingBag size={20} />
-              <span style={{ fontWeight: 800 }}>Xem giỏ hàng ({cartItemsCount})</span>
+              <span style={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                Xem giỏ hàng (<span key={cartItemsCount} style={{ display: 'inline-block', animation: 'popIn 0.4s var(--ease-expo)' }}>{cartItemsCount}</span>)
+              </span>
             </div>
-            <span style={{ fontWeight: 800 }}>{cartTotal.toLocaleString('vi-VN')} đ</span>
+            <span key={cartTotal} style={{ fontWeight: 800, display: 'inline-block', animation: 'popIn 0.4s var(--ease-expo)' }}>{cartTotal.toLocaleString('vi-VN')} đ</span>
           </button>
         </div>
       )}
@@ -592,7 +667,7 @@ export default function CustomerPortal({
                     style={{ flex: 1, minHeight: '40px', backgroundColor: paymentMethod === 'mobile' ? 'var(--color-primary-light)' : 'transparent', borderColor: paymentMethod === 'mobile' ? 'var(--color-primary)' : 'var(--color-border)', color: paymentMethod === 'mobile' ? 'var(--color-primary)' : 'var(--color-text-main)', fontSize: '0.85rem' }}
                     onClick={() => setPaymentMethod('mobile')}
                   >
-                    Chuyển khoản
+                    Chuyển khoản / QR
                   </button>
                 </div>
               </div>
@@ -681,6 +756,66 @@ export default function CustomerPortal({
             <button className="btn-primary" style={{ width: '100%', marginTop: 'var(--spacing-sm)' }} onClick={() => setShowSuccessModal(false)}>
               Đồng ý và Theo dõi đơn
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* QR Payment Modal */}
+      {showQrPaymentModal && (
+        <div className="dialog-backdrop" style={{ zIndex: 'var(--z-modal)' }}>
+          <div className="dialog-content" style={{ textAlign: 'center', padding: 'var(--spacing-xl)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <h2 style={{ fontSize: '1.3rem', fontFamily: 'var(--font-display)', fontWeight: 800, marginBottom: 'var(--spacing-xs)' }}>Thanh toán đơn hàng</h2>
+            <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', lineHeight: '1.6', marginBottom: 'var(--spacing-md)' }}>
+              Đơn hàng của bạn đã được gửi tới bếp. Vui lòng quét mã QR dưới đây để thanh toán số tiền:
+            </p>
+            
+            <div style={{ fontSize: '1.5rem', color: 'var(--color-primary)', fontWeight: 800, marginBottom: 'var(--spacing-md)' }}>
+              {qrPaymentTotal.toLocaleString('vi-VN')} đ
+            </div>
+
+            <div style={{ padding: 'var(--spacing-sm)', border: '2px solid var(--color-primary)', borderRadius: 'var(--radius-md)', backgroundColor: 'var(--color-bg-base)', marginBottom: 'var(--spacing-md)' }}>
+              <img src={restaurant.paymentQrCode} alt="Payment QR Code" style={{ width: '200px', height: '200px', objectFit: 'contain' }} />
+            </div>
+
+            <button 
+              className="btn-primary" 
+              style={{ width: '100%', minHeight: '44px' }} 
+              onClick={() => {
+                if (qrPaymentOrderId) {
+                  const updatedOrders = orders.map(o => {
+                    if (o.id === qrPaymentOrderId) {
+                      return { ...o, paymentReported: true }
+                    }
+                    return o
+                  })
+                  updateGlobalState({ orders: updatedOrders }, 'REPORT_QR_PAYMENT')
+                }
+                setShowQrPaymentModal(false)
+                setShowSuccessModal(true)
+              }}
+            >
+              Đã thanh toán / Hoàn tất
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showTakeoverModal && (
+        <div className="dialog-backdrop" style={{ zIndex: 'var(--z-modal)' }}>
+          <div className="dialog-content" style={{ textAlign: 'center', padding: 'var(--spacing-xl)', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <span style={{ fontSize: '3rem', marginBottom: 'var(--spacing-sm)' }}>👋</span>
+            <h2 style={{ fontSize: '1.3rem', fontFamily: 'var(--font-display)', fontWeight: 800, marginBottom: 'var(--spacing-xs)' }}>Bắt đầu gọi món mới?</h2>
+            <p style={{ fontSize: '0.85rem', color: 'var(--color-text-muted)', lineHeight: '1.6', marginBottom: 'var(--spacing-md)' }}>
+              Hệ thống ghi nhận Bàn {tableNumber} đang có đơn phục vụ hoặc hóa đơn từ lượt khách trước.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-sm)', width: '100%' }}>
+              <button className="btn-primary" style={{ width: '100%' }} onClick={handleStartNewSession}>
+                Tạo Lượt Mới (Khách Mới)
+              </button>
+              <button className="btn-ghost" style={{ width: '100%', minHeight: '44px' }} onClick={handleJoinExistingSession}>
+                Xem Đơn Hiện Tại (Đi Chung Nhóm)
+              </button>
+            </div>
           </div>
         </div>
       )}

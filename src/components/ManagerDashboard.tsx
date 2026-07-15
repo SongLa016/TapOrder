@@ -17,7 +17,8 @@ import {
   RefreshCw,
   Home,
   ChevronLeft,
-  QrCode
+  QrCode,
+  Inbox
 } from 'lucide-react'
 
 interface ManagerDashboardProps {
@@ -54,7 +55,8 @@ export default function ManagerDashboard({
     name: restaurant.name,
     tagline: restaurant.tagline,
     logo: restaurant.logo,
-    address: restaurant.address || ''
+    address: restaurant.address || '',
+    paymentQrCode: restaurant.paymentQrCode || ''
   })
 
   // Edit / Add Dish State
@@ -84,8 +86,76 @@ export default function ManagerDashboard({
     name: restaurant.name || '',
     tagline: restaurant.tagline || '',
     logo: restaurant.logo || '🍜',
-    address: restaurant.address || ''
+    address: restaurant.address || '',
+    paymentQrCode: restaurant.paymentQrCode || ''
   })
+
+  // Audio Context State
+  const [isAudioSuspended, setIsAudioSuspended] = useState(false)
+  
+  // Notification Toast State
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const prevOrdersRef = React.useRef(orders)
+
+  // Listen for orders that just reported QR payment
+  React.useEffect(() => {
+    orders.forEach(order => {
+      if (order.paymentMethod === 'mobile' && order.paymentReported) {
+        const prevOrder = prevOrdersRef.current.find(po => po.id === order.id)
+        if (!prevOrder || !prevOrder.paymentReported) {
+          // This order just transitioned to paymentReported = true
+          const dishNames = order.items.map(item => {
+            const dish = menu.find(d => d.id === item.menuItemId)
+            return dish ? `${item.quantity}x ${dish.name}` : `${item.quantity}x Món ăn`
+          }).join(', ')
+          
+          const tableDisp = tables.find(t => t.number === order.tableNumber)?.label || `Bàn ${order.tableNumber}`
+          const titleText = order.customerName ? `${order.customerName} (${tableDisp})` : tableDisp
+          
+          setToastMessage(`🔔 ${titleText} báo cáo ĐÃ CHUYỂN KHOẢN cho đơn hàng (${dishNames}). Quản lý vui lòng kiểm tra App Ngân hàng để đối chiếu!`)
+        }
+      }
+    })
+    prevOrdersRef.current = orders
+  }, [orders, menu, tables])
+
+  React.useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => setToastMessage(null), 8000)
+      return () => clearTimeout(timer)
+    }
+  }, [toastMessage])
+
+  // Listen to Web Audio API status
+  React.useEffect(() => {
+    try {
+      const AudioCtxClass = (window.AudioContext || (window as any).webkitAudioContext)
+      if (AudioCtxClass) {
+        const dummyCtx = new AudioCtxClass()
+        if (dummyCtx.state === 'suspended') {
+          setIsAudioSuspended(true)
+        }
+        dummyCtx.close()
+      }
+    } catch (e) {
+      console.warn('AudioContext check skipped:', e)
+    }
+  }, [])
+
+  const handleActivateAudio = () => {
+    try {
+      const AudioCtxClass = (window.AudioContext || (window as any).webkitAudioContext)
+      if (AudioCtxClass) {
+        const dummyCtx = new AudioCtxClass()
+        dummyCtx.resume().then(() => {
+          setIsAudioSuspended(false)
+          dummyCtx.close()
+        })
+      }
+    } catch (e) {
+      console.error(e)
+    }
+  }
 
   // Sync state helpers
   const handleToggleAvailable = (dishId: string) => {
@@ -96,6 +166,16 @@ export default function ManagerDashboard({
       return item
     })
     updateGlobalState({ menu: updatedMenu }, 'TOGGLE_STOCK')
+  }
+
+  const handleVerifyPayment = (orderId: string) => {
+    const updatedOrders = orders.map(order => {
+      if (order.id === orderId) {
+        return { ...order, paymentVerified: true }
+      }
+      return order
+    })
+    updateGlobalState({ orders: updatedOrders }, 'VERIFY_PAYMENT')
   }
 
   const handleUpdateOrderStatus = (orderId: string, newStatus: 'pending' | 'served' | 'completed') => {
@@ -119,7 +199,7 @@ export default function ManagerDashboard({
         const newSessionId = `session-${Date.now()}`
         updatedTables = tables.map(t => {
           if (t.number === orderObj.tableNumber) {
-            return { ...t, status: 'empty' as const, activeCall: undefined, sessionId: newSessionId }
+            return { ...t, status: 'empty' as const, activeCall: null, sessionId: newSessionId }
           }
           return t
         })
@@ -141,7 +221,14 @@ export default function ManagerDashboard({
   const handleClearCall = (tableNumber: number) => {
     const updatedTables = tables.map(t => {
       if (t.number === tableNumber) {
-        return { ...t, activeCall: undefined }
+        // Check if there are any pending or served orders for this table
+        const hasActiveOrders = orders.some(o => o.tableNumber === tableNumber && o.status !== 'completed')
+        
+        // If there are no active orders, revert the table to 'empty'
+        // Otherwise, keep its current status (e.g. 'billing' or 'ordering')
+        const newStatus = hasActiveOrders ? t.status : 'empty'
+        
+        return { ...t, activeCall: null, status: newStatus }
       }
       return t
     })
@@ -152,11 +239,14 @@ export default function ManagerDashboard({
   const handleSaveDish = (e: React.FormEvent) => {
     e.preventDefault()
 
+    const sanitizedPrice = Math.max(0, dishForm.price)
+    const sanitizedForm = { ...dishForm, price: sanitizedPrice }
+
     if (editingDish) {
       // Edit mode
       const updatedMenu = menu.map(d => {
         if (d.id === editingDish.id) {
-          return { ...d, ...dishForm }
+          return { ...d, ...sanitizedForm }
         }
         return d
       })
@@ -165,7 +255,7 @@ export default function ManagerDashboard({
       // Create mode
       const newDish: MenuItem = {
         id: `food-${Date.now()}`,
-        ...dishForm
+        ...sanitizedForm
       }
       updateGlobalState({ menu: [...menu, newDish] }, 'ADD_DISH')
     }
@@ -175,6 +265,16 @@ export default function ManagerDashboard({
   }
 
   const handleDeleteDish = (dishId: string) => {
+    // Check if dish is in any active orders
+    const isInActiveOrder = orders.some(o => 
+      o.status !== 'completed' && o.items.some(i => i.menuItemId === dishId)
+    )
+
+    if (isInActiveOrder) {
+      alert('Không thể xóa! Món này đang nằm trong đơn hàng chờ phục vụ. Gợi ý: Chuyển trạng thái sang "Hết món" thay vì xóa.')
+      return
+    }
+
     if (window.confirm('Bạn có chắc chắn muốn xóa món này?')) {
       const updatedMenu = menu.filter(d => d.id !== dishId)
       updateGlobalState({ menu: updatedMenu }, 'DELETE_DISH')
@@ -203,6 +303,14 @@ export default function ManagerDashboard({
   }
 
   const handleDeleteTable = (tableNumber: number) => {
+    // Check if table has active orders
+    const hasActiveOrders = orders.some(o => o.tableNumber === tableNumber && o.status !== 'completed')
+
+    if (hasActiveOrders) {
+      alert(`Không thể xóa! Bàn ${tableNumber} đang có khách và chưa hoàn tất thanh toán.`)
+      return
+    }
+
     const tableDisp = tables.find(t => t.number === tableNumber)
     const displayName = tableDisp ? getTableName(tableDisp) : `Bàn ${tableNumber}`
     if (window.confirm(`Bạn có chắc chắn muốn xóa ${displayName}?`)) {
@@ -612,6 +720,36 @@ export default function ManagerDashboard({
                 />
               </div>
             </div>
+
+            {/* QR Payment Setup */}
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">Mã QR Thanh toán (Tùy chọn):</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-xs)' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Tải lên ảnh mã QR nhận tiền (VietQR, Momo...) để khách quét:</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ fontSize: '0.85rem', padding: 'var(--spacing-xs)', width: '100%', minHeight: '38px' }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (file) {
+                      const reader = new FileReader()
+                      reader.onloadend = () => {
+                        if (typeof reader.result === 'string') {
+                          setOnboardForm({ ...onboardForm, paymentQrCode: reader.result })
+                        }
+                      }
+                      reader.readAsDataURL(file)
+                    }
+                  }}
+                />
+                {onboardForm.paymentQrCode && (
+                  <div style={{ marginTop: 'var(--spacing-xs)', textAlign: 'center' }}>
+                    <img src={onboardForm.paymentQrCode} alt="Payment QR" style={{ width: '100px', height: '100px', objectFit: 'contain', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }} />
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           <button
@@ -660,6 +798,31 @@ export default function ManagerDashboard({
           <RefreshCw size={14} /> Test Ping
         </button>
       </header>
+
+      {isAudioSuspended && (
+        <div 
+          className="no-print"
+          onClick={handleActivateAudio}
+          style={{
+            backgroundColor: 'var(--color-error-light)',
+            borderBottom: '1px solid var(--color-error)',
+            padding: 'var(--spacing-sm) var(--spacing-md)',
+            textAlign: 'center',
+            cursor: 'pointer',
+            fontSize: '0.85rem',
+            fontWeight: 700,
+            color: 'var(--color-error)',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            gap: 'var(--spacing-sm)',
+            animation: 'fadeIn 0.3s ease'
+          }}
+        >
+          <span>🔔</span>
+          <span>Hệ thống chuông cảnh báo đang bị trình duyệt tắt âm. Click vào đây để kích hoạt chuông báo đơn mới/yêu cầu phục vụ.</span>
+        </div>
+      )}
 
       {/* Top Metrics Cards */}
       <section className="layout-container" style={{ padding: 'var(--spacing-md) var(--spacing-md) 0 var(--spacing-md)' }}>
@@ -860,8 +1023,13 @@ export default function ManagerDashboard({
                               <strong style={{ fontSize: '0.95rem' }}>{titleText}</strong>
                               <span style={{ display: 'block', fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>#{order.id.slice(-6)} · {new Date(order.timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} ngày {new Date(order.timestamp).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })}</span>
                             </div>
-                            <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '4px' }}>
                               {order.paymentMethod === 'cash' ? '💵' : order.paymentMethod === 'card' ? '💳' : '📲'}
+                              {order.paymentMethod === 'mobile' && (
+                                order.paymentVerified 
+                                  ? <span style={{ color: 'var(--color-success)', fontWeight: 700, fontStyle: 'normal' }}>✅ Đã nhận tiền</span>
+                                  : <span style={{ color: 'var(--color-warning)', fontWeight: 700, fontStyle: 'normal', backgroundColor: 'var(--color-warning-light)', padding: '2px 4px', borderRadius: '4px' }}>⚠️ Chờ xác nhận</span>
+                              )}
                             </span>
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', margin: '4px 0', fontSize: '0.82rem' }}>
@@ -870,26 +1038,34 @@ export default function ManagerDashboard({
                               return (
                                 <div key={item.menuItemId} style={{ display: 'flex', justifyContent: 'space-between' }}>
                                   <span>
-                                    <strong>{item.quantity}×</strong> {dish?.name || 'Món ăn'}
-                                    {dish && <span style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem', marginLeft: '4px' }}>({dish.price.toLocaleString('vi-VN')} đ)</span>}
+                                    <strong>{item.quantity}×</strong> {item.snapshotName || dish?.name || 'Món ăn'}
+                                    {(item.snapshotPrice !== undefined || dish) && <span style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem', marginLeft: '4px' }}>({(item.snapshotPrice ?? dish?.price ?? 0).toLocaleString('vi-VN')} đ)</span>}
                                   </span>
                                   {item.notes && <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>({item.notes})</span>}
                                 </div>
                               )
                             })}
                           </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--color-border)', paddingTop: '4px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--color-border)', paddingTop: '8px' }}>
                             <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--color-primary)' }}>{order.total.toLocaleString('vi-VN')} đ</span>
-                            <button className="btn-primary" style={{ minHeight: '30px', padding: '4px 10px', fontSize: '0.78rem' }} onClick={() => handleUpdateOrderStatus(order.id, 'served')}>
-                              ✓ Đã phục vụ
-                            </button>
+                            <div style={{ display: 'flex', gap: 'var(--spacing-xs)' }}>
+                              {order.paymentMethod === 'mobile' && !order.paymentVerified && (
+                                <button className="btn-secondary" style={{ minHeight: '30px', padding: '4px 8px', fontSize: '0.75rem', borderColor: 'var(--color-warning)', color: 'var(--color-warning)' }} onClick={() => handleVerifyPayment(order.id)}>
+                                  Xác nhận tiền
+                                </button>
+                              )}
+                              <button className="btn-primary" style={{ minHeight: '30px', padding: '4px 10px', fontSize: '0.78rem' }} onClick={() => handleUpdateOrderStatus(order.id, 'served')}>
+                                ✓ Đã phục vụ
+                              </button>
+                            </div>
                           </div>
                         </div>
                       )
                     })}
                     {col.length === 0 && (
-                      <div style={{ textAlign: 'center', padding: 'var(--spacing-lg)', color: 'var(--color-text-muted)', backgroundColor: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--color-border)', fontSize: '0.85rem' }}>
-                        Không có đơn đang chờ
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 'var(--spacing-sm)', padding: 'var(--spacing-xl) var(--spacing-md)', color: 'var(--color-text-muted)', backgroundColor: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '2px dashed var(--color-border)', fontSize: '0.85rem', opacity: 0.8 }}>
+                        <Inbox size={32} style={{ color: 'var(--color-border-hover)' }} />
+                        <span style={{ fontWeight: 600 }}>Chưa có đơn chờ phục vụ</span>
                       </div>
                     )}
                   </div>
@@ -925,8 +1101,13 @@ export default function ManagerDashboard({
                               <strong style={{ fontSize: '0.95rem' }}>{titleText}</strong>
                               <span style={{ display: 'block', fontSize: '0.7rem', color: 'var(--color-text-muted)' }}>#{order.id.slice(-6)} · {new Date(order.timestamp).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} ngày {new Date(order.timestamp).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })}</span>
                             </div>
-                            <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '4px' }}>
                               {order.paymentMethod === 'cash' ? '💵' : order.paymentMethod === 'card' ? '💳' : '📲'}
+                              {order.paymentMethod === 'mobile' && (
+                                order.paymentVerified 
+                                  ? <span style={{ color: 'var(--color-success)', fontWeight: 700, fontStyle: 'normal' }}>✅ Đã nhận tiền</span>
+                                  : <span style={{ color: 'var(--color-warning)', fontWeight: 700, fontStyle: 'normal', backgroundColor: 'var(--color-warning-light)', padding: '2px 4px', borderRadius: '4px' }}>⚠️ Chờ xác nhận</span>
+                              )}
                             </span>
                           </div>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', margin: '4px 0', fontSize: '0.82rem' }}>
@@ -935,26 +1116,34 @@ export default function ManagerDashboard({
                               return (
                                 <div key={item.menuItemId} style={{ display: 'flex', justifyContent: 'space-between' }}>
                                   <span>
-                                    <strong>{item.quantity}×</strong> {dish?.name || 'Món ăn'}
-                                    {dish && <span style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem', marginLeft: '4px' }}>({dish.price.toLocaleString('vi-VN')} đ)</span>}
+                                    <strong>{item.quantity}×</strong> {item.snapshotName || dish?.name || 'Món ăn'}
+                                    {(item.snapshotPrice !== undefined || dish) && <span style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem', marginLeft: '4px' }}>({(item.snapshotPrice ?? dish?.price ?? 0).toLocaleString('vi-VN')} đ)</span>}
                                   </span>
                                   {item.notes && <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', fontStyle: 'italic' }}>({item.notes})</span>}
                                 </div>
                               )
                             })}
                           </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--color-border)', paddingTop: '4px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--color-border)', paddingTop: '8px' }}>
                             <span style={{ fontWeight: 700, fontSize: '0.85rem', color: 'var(--color-primary)' }}>{order.total.toLocaleString('vi-VN')} đ</span>
-                            <button className="btn-secondary" style={{ minHeight: '30px', padding: '4px 10px', fontSize: '0.78rem' }} onClick={() => handleUpdateOrderStatus(order.id, 'completed')}>
-                              💳 Hoàn tất TT
-                            </button>
+                            <div style={{ display: 'flex', gap: 'var(--spacing-xs)' }}>
+                              {order.paymentMethod === 'mobile' && !order.paymentVerified && (
+                                <button className="btn-secondary" style={{ minHeight: '30px', padding: '4px 8px', fontSize: '0.75rem', borderColor: 'var(--color-warning)', color: 'var(--color-warning)' }} onClick={() => handleVerifyPayment(order.id)}>
+                                  Xác nhận tiền
+                                </button>
+                              )}
+                              <button className="btn-secondary" style={{ minHeight: '30px', padding: '4px 10px', fontSize: '0.78rem' }} onClick={() => handleUpdateOrderStatus(order.id, 'completed')}>
+                                💳 Hoàn tất TT
+                              </button>
+                            </div>
                           </div>
                         </div>
                       )
                     })}
                     {col.length === 0 && (
-                      <div style={{ textAlign: 'center', padding: 'var(--spacing-lg)', color: 'var(--color-text-muted)', backgroundColor: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--color-border)', fontSize: '0.85rem' }}>
-                        Chưa có đơn đã phục vụ
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 'var(--spacing-sm)', padding: 'var(--spacing-xl) var(--spacing-md)', color: 'var(--color-text-muted)', backgroundColor: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '2px dashed var(--color-border)', fontSize: '0.85rem', opacity: 0.8 }}>
+                        <Inbox size={32} style={{ color: 'var(--color-border-hover)' }} />
+                        <span style={{ fontWeight: 600 }}>Chưa có đơn đã phục vụ</span>
                       </div>
                     )}
                   </div>
@@ -1001,7 +1190,9 @@ export default function ManagerDashboard({
                           <div style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)' }}>
                             {order.items.map(item => {
                               const dish = menu.find(d => d.id === item.menuItemId)
-                              return `${item.quantity}× ${dish?.name || 'Món ăn'}${dish ? ` (${dish.price.toLocaleString('vi-VN')} đ)` : ''}`
+                              const name = item.snapshotName || dish?.name || 'Món ăn'
+                              const price = item.snapshotPrice ?? dish?.price
+                              return `${item.quantity}× ${name}${price !== undefined ? ` (${price.toLocaleString('vi-VN')} đ)` : ''}`
                             }).join(', ')}
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', borderTop: '1px solid var(--color-border)', paddingTop: '4px' }}>
@@ -1014,8 +1205,9 @@ export default function ManagerDashboard({
                       )
                     })}
                     {totalDone === 0 && (
-                      <div style={{ textAlign: 'center', padding: 'var(--spacing-lg)', color: 'var(--color-text-muted)', backgroundColor: 'var(--color-bg-surface)', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--color-border)', fontSize: '0.85rem' }}>
-                        Chưa có đơn hoàn thành
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 'var(--spacing-sm)', padding: 'var(--spacing-xl) var(--spacing-md)', color: 'var(--color-text-muted)', backgroundColor: 'var(--color-bg-base)', borderRadius: 'var(--radius-md)', border: '2px dashed var(--color-border)', fontSize: '0.85rem', opacity: 0.8 }}>
+                        <Inbox size={32} style={{ color: 'var(--color-border-hover)' }} />
+                        <span style={{ fontWeight: 600 }}>Chưa có đơn hoàn thành</span>
                       </div>
                     )}
                     {totalDone > 10 && (
@@ -1098,6 +1290,33 @@ export default function ManagerDashboard({
                         }}
                       />
                     </div>
+                    
+                    <div className="form-group" style={{ margin: 0 }}>
+                      <label className="form-label">Mã QR Thanh toán (Tùy chọn):</label>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        style={{ fontSize: '0.8rem', padding: 'var(--spacing-xs)', width: '100%', minHeight: '38px' }}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0]
+                          if (file) {
+                            const reader = new FileReader()
+                            reader.onloadend = () => {
+                              if (typeof reader.result === 'string') {
+                                setRestForm({ ...restForm, paymentQrCode: reader.result })
+                              }
+                            }
+                            reader.readAsDataURL(file)
+                          }
+                        }}
+                      />
+                      {restForm.paymentQrCode && (
+                        <div style={{ marginTop: 'var(--spacing-xs)', textAlign: 'center' }}>
+                          <img src={restForm.paymentQrCode} alt="Payment QR" style={{ width: '100px', height: '100px', objectFit: 'contain', border: '1px solid var(--color-border)', borderRadius: 'var(--radius-sm)' }} />
+                        </div>
+                      )}
+                    </div>
+
                     <button className="btn-primary" style={{ width: '100%' }} onClick={handleSaveRestaurant}>Lưu thông tin</button>
                   </div>
                 ) : (
@@ -1674,7 +1893,7 @@ export default function ManagerDashboard({
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredOrders.map((order, index) => {
+                      {[...filteredOrders].sort((a, b) => b.timestamp - a.timestamp).map((order, index) => {
                         const table = tables.find(t => t.number === order.tableNumber)
                         const tableLabelText = table ? getTableName(table) : `Bàn ${order.tableNumber}`
                         const customerDisp = order.customerName ? `${order.customerName} (${tableLabelText})` : tableLabelText
@@ -1708,9 +1927,9 @@ export default function ManagerDashboard({
                                   const dish = menu.find(d => d.id === item.menuItemId)
                                   return (
                                     <div key={idx} style={{ fontSize: '0.82rem' }}>
-                                      <strong>{item.quantity}x</strong> {dish?.name || 'Món ăn'} 
+                                      <strong>{item.quantity}x</strong> {item.snapshotName || dish?.name || 'Món ăn'} 
                                       <span style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem', marginLeft: '4px' }}>
-                                        ({dish ? dish.price.toLocaleString('vi-VN') : '0'} đ)
+                                        ({(item.snapshotPrice ?? dish?.price ?? 0).toLocaleString('vi-VN')} đ)
                                       </span>
                                       {item.notes && <span style={{ color: 'var(--color-error)', fontStyle: 'italic', fontSize: '0.75rem', marginLeft: '6px' }}>*Ghi chú: {item.notes}</span>}
                                     </div>
@@ -1778,6 +1997,7 @@ export default function ManagerDashboard({
                 <input
                   type="number"
                   required
+                  min={0}
                   className="form-control"
                   value={dishForm.price}
                   onChange={(e) => setDishForm({ ...dishForm, price: parseInt(e.target.value, 10) || 0 })}
@@ -1855,6 +2075,26 @@ export default function ManagerDashboard({
               </button>
             </form>
           </div>
+        </div>
+      )}
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div style={{
+          position: 'fixed',
+          top: '20px',
+          right: '20px',
+          backgroundColor: 'var(--color-success)',
+          color: 'var(--color-text-inverse)',
+          padding: 'var(--spacing-md) var(--spacing-lg)',
+          borderRadius: 'var(--radius-md)',
+          boxShadow: 'var(--shadow-high)',
+          zIndex: 9999,
+          fontWeight: 600,
+          animation: 'fadeIn 0.3s ease',
+          maxWidth: '400px',
+          lineHeight: '1.5'
+        }}>
+          {toastMessage}
         </div>
       )}
     </div>

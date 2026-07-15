@@ -72,8 +72,43 @@ export default defineConfig({
                   
                   if (updates.restaurant !== undefined) appState.restaurant = updates.restaurant
                   if (updates.menu !== undefined) appState.menu = updates.menu
-                  if (updates.tables !== undefined) appState.tables = updates.tables
-                  if (updates.orders !== undefined) appState.orders = updates.orders
+                  
+                  if (updates.tables !== undefined) {
+                    if (updates.modifiedTableNumbers !== undefined && Array.isArray(updates.modifiedTableNumbers)) {
+                      // Partially update only the modified tables
+                      appState.tables = appState.tables.map((t: any) => {
+                        if (updates.modifiedTableNumbers.includes(t.number)) {
+                          const incoming = updates.tables.find((it: any) => it.number === t.number)
+                          return incoming ? { ...t, ...incoming } : t
+                        }
+                        return t
+                      })
+                      // Append any new tables added by manager
+                      updates.tables.forEach((it: any) => {
+                        if (!appState.tables.some((t: any) => t.number === it.number)) {
+                          appState.tables.push(it)
+                        }
+                      })
+                    } else {
+                      // Fallback for complete overrides (e.g. initial seed)
+                      appState.tables = updates.tables
+                    }
+                  }
+
+                  if (updates.orders !== undefined) {
+                    // Merge orders by ID to prevent concurrent overwrite
+                    const serverOrderMap = new Map(appState.orders.map((o: any) => [o.id, o]))
+                    updates.orders.forEach((newOrder: any) => {
+                      const existing = serverOrderMap.get(newOrder.id)
+                      if (!existing) {
+                        appState.orders.push(newOrder)
+                      } else {
+                        Object.assign(existing, newOrder)
+                      }
+                    })
+                    // Maintain descending chronological order
+                    appState.orders.sort((a: any, b: any) => b.timestamp - a.timestamp)
+                  }
                   
                   broadcast('state-updated', {
                     state: appState,
