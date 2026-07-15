@@ -132,9 +132,14 @@ export default function App() {
   }, [])
 
   const navigateTo = (queryParams: string) => {
-    const newUrl = queryParams ? `${window.location.pathname}?${queryParams}` : window.location.pathname
+    const currentTenantId = params.get('r')
+    const finalParams = new URLSearchParams(queryParams)
+    if (currentTenantId) {
+      finalParams.set('r', currentTenantId)
+    }
+    const newUrl = `${window.location.pathname}?${finalParams.toString()}`
     window.history.pushState({}, '', newUrl)
-    setParams(new URLSearchParams(queryParams))
+    setParams(finalParams)
   }
 
   // Lấy Mã Quán (Tenant ID) và Router params từ URL
