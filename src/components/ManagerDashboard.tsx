@@ -542,7 +542,7 @@ export default function ManagerDashboard({
     if (receiptOrder) {
       const timer1 = setTimeout(() => {
         window.print();
-        const timer2 = setTimeout(() => {
+        setTimeout(() => {
           setReceiptOrder(null);
         }, 500);
       }, 300);
