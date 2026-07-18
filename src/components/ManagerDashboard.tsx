@@ -57,7 +57,8 @@ export default function ManagerDashboard({
     tagline: restaurant.tagline,
     logo: restaurant.logo,
     address: restaurant.address || '',
-    paymentQrCode: restaurant.paymentQrCode || ''
+    paymentQrCode: restaurant.paymentQrCode || '',
+    onboarded: restaurant.onboarded
   })
 
   // Edit / Add Dish State
@@ -1506,7 +1507,8 @@ export default function ManagerDashboard({
                         tagline: restaurant.tagline,
                         logo: restaurant.logo,
                         address: restaurant.address || '',
-                        paymentQrCode: restaurant.paymentQrCode || ''
+                        paymentQrCode: restaurant.paymentQrCode || '',
+                        onboarded: restaurant.onboarded
                       });
                     }
                     setIsEditingRest(!isEditingRest);
