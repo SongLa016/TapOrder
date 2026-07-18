@@ -1031,8 +1031,7 @@ export default function ManagerDashboard({
             className="btn-primary"
             style={{ backgroundColor: 'var(--color-bg-surface)', color: 'var(--color-danger)', minHeight: '38px', padding: 'var(--spacing-xs) var(--spacing-sm)', fontSize: '0.85rem', border: 'none' }}
             onClick={() => {
-              const tenantId = new URLSearchParams(window.location.search).get('r')
-              window.location.href = `/?r=${tenantId}&role=admin`
+              window.location.reload()
             }}
           >
             <LogOut size={14} /> Đăng Xuất
